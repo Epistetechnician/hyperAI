@@ -291,6 +291,9 @@ fn plain_digest(bytes: &[u8]) -> Sha256Digest {
 #[cfg(test)]
 mod tests {
     use outcomes_corpus::{ChallengeCorpusAdapter, LocalFixtureCorpus};
+    use outcomes_domain::{ExecutionOutcome, fixtures::local_demo_claim_draft};
+    use outcomes_runner::{RunnerRequest, ScriptedRunner, VerificationRunner, evaluate_admission};
+    use outcomes_source::LocalSubmissionLedger;
 
     use super::*;
 
@@ -343,6 +346,58 @@ mod tests {
         assert_eq!(profile.commit.len(), 40);
         assert!(!profile.live_model_enabled);
         assert_eq!(profile.truth_authority, "PINNED_HSAI_CHALLENGE_VERIFIER");
+        Ok(())
+    }
+
+    #[test]
+    fn contract_recorded_nyu_agent_candidate_must_pass_hsai_verifier()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let now = timestamp("2026-07-10T12:00:00Z")?;
+        let corpus = LocalFixtureCorpus::new(now.clone())?;
+        let snapshot = corpus.snapshot_corpus(corpus.describe_corpus().discovery_ref.as_str())?;
+        let package = corpus.materialize_challenge(snapshot.snapshot_digest, "exact-bytes-v1")?;
+        let solver_view = corpus.solver_view(package.package_digest)?;
+        assert_eq!(solver_view.exposed_artifact_digests.len(), 1);
+        assert_eq!(solver_view.excluded_secret_digests.len(), 1);
+
+        let harness = RecordedHarness::new(b"hsai-pass-v1".to_vec(), Some(-1))?;
+        let plan = harness.prepare_run(
+            package,
+            solver_view,
+            domain_separated_digest("hsai.test-harness-config.v1", &"offline")?,
+        )?;
+        let result = harness.execute(&plan, timestamp("2026-07-10T12:01:00Z")?)?;
+        let extracted = harness.extract_candidates(&result)?;
+        assert_eq!(extracted.len(), 1);
+
+        let claim = local_demo_claim_draft()?.freeze()?;
+        let mut ledger = LocalSubmissionLedger::new(claim.claim_id.clone(), now);
+        let candidate = ledger.ingest(
+            claim.claim_id.clone(),
+            "nyu.recorded",
+            &extracted[0].source_ref,
+            "1",
+            None,
+            timestamp("2026-07-10T12:01:00Z")?,
+            timestamp("2026-07-10T12:01:01Z")?,
+            "application/octet-stream",
+            extracted[0].bytes.clone(),
+        )?;
+        let admission = evaluate_admission(&claim, &candidate)?;
+        let started = timestamp("2026-07-10T12:02:00Z")?;
+        let ended = timestamp("2026-07-10T12:02:01Z")?;
+        let execution = ScriptedRunner::exact_bytes_fixture().execute(&RunnerRequest {
+            claim: &claim,
+            candidate: &candidate,
+            candidate_bytes: &extracted[0].bytes,
+            admission: &admission,
+            run_id: "nyu-recorded-verifier-run",
+            started_at: &started,
+            ended_at: &ended,
+            logical_time: &started,
+        })?;
+        assert_eq!(execution.normalized_outcome, ExecutionOutcome::Pass);
+        assert_eq!(result.harness_reward_microunits, Some(-1));
         Ok(())
     }
 }

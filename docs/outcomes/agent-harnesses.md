@@ -9,3 +9,9 @@ records reward/cost telemetry without using reward as resolution evidence.
 single-executor, and NYU baseline entrypoints. Default mode is recorded trace;
 live models are disabled. Every extracted candidate must enter the submission
 ledger and pass the pinned HSAI challenge verifier.
+
+The contract suite exercises that full boundary with a recorded NYU-style
+candidate: solver-view-only plan, trace/candidate extraction, HSAI submission
+ledger ingestion, admission, and the hidden pinned verifier. A deliberately
+negative recorded harness reward does not prevent a verifier PASS and therefore
+cannot act as truth.

@@ -6,7 +6,7 @@
     {"slice":"local-observation-runner-evidence-resolution","status":"TESTED","evidence":"cargo test -p outcomes-application"},
     {"slice":"sqlite-eventing-and-filesystem-cas","status":"TESTED","evidence":"pnpm run verify:contracts"},
     {"slice":"postgres-migration-execution","status":"EXTERNALLY_BLOCKED","evidence":"migration SQL exists; no PostgreSQL service available locally"},
-    {"slice":"external-corpus-profiles","status":"IMPLEMENTED","evidence":"profile schema, pins, conformance tests, and truthful readiness records"},
+    {"slice":"external-corpus-profiles","status":"TESTED","evidence":"profile schema, pins, sanitized normalized recorded manifests, solver-view boundaries, conformance tests, and truthful readiness records"},
     {"slice":"external-corpus-byte-materialization","status":"FUTURE","evidence":"no upstream clone, submodule, LFS, archive, or OCI materialization in this build"},
     {"slice":"hip4-recorded-and-live-readonly-metadata","status":"TESTED","evidence":"outcomeMeta recorded parser tested; live outcomeMeta client compiles behind live-readonly and is not a default test dependency; settledOutcome client is future work"},
     {"slice":"hip4-mock-settlement-and-reconciliation","status":"TESTED","evidence":"idempotency, stale binding, crash recovery, and mainnet refusal tests"},

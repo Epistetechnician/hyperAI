@@ -12,6 +12,9 @@ ceiling below `SETTLEMENT_READY`. Repository-level license statements never
 promote ambiguous item-level rights.
 
 Current external profiles validate catalog, pin, exclusion, rights, and
-readiness metadata. They do not yet clone/materialize upstream challenge bytes,
+readiness metadata. Sanitized normalized recorded path manifests cover every
+profile in `fixtures/corpora/recorded-profile-manifests.json`; they exercise
+solver-view separation without copying upstream challenge content. Profiles do
+not yet clone/materialize upstream challenge bytes,
 resolve submodules/LFS/images, or prove a runnable verifier. They therefore
 remain `EVALUATION_ONLY` or `CATALOG_ONLY` and cannot drive settlement.

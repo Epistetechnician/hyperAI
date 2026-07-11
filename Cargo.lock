@@ -1465,6 +1465,8 @@ version = "0.1.0"
 dependencies = [
  "outcomes-corpus",
  "outcomes-domain",
+ "outcomes-runner",
+ "outcomes-source",
  "serde",
  "serde_json",
  "sha2 0.11.0",

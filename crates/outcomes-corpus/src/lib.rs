@@ -81,6 +81,32 @@ pub struct CorpusProfile {
     pub readiness: SettlementReadiness,
 }
 
+/// Sanitized normalized fixture catalog for pinned external profiles.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecordedCorpusFixtureCatalog {
+    /// Catalog schema version.
+    pub schema_version: String,
+    /// One sanitized path manifest per profile.
+    pub fixtures: Vec<RecordedCorpusFixture>,
+}
+
+/// Normalized paths retained without copying upstream challenge bytes.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecordedCorpusFixture {
+    /// Matching corpus profile ID.
+    pub profile_id: String,
+    /// Stable recorded challenge reference.
+    pub challenge_ref: String,
+    /// Paths safe for a solver view.
+    pub normalized_public_paths: Vec<String>,
+    /// Paths excluded as verifier, secret, solution, or writeup material.
+    pub protected_paths: Vec<String>,
+    /// Exact runnable-verifier status.
+    pub verifier_status: String,
+}
+
 /// Load and validate the seven required pinned corpus profiles.
 ///
 /// # Errors
@@ -127,6 +153,80 @@ pub fn bundled_corpus_profiles() -> Result<CorpusProfileCatalog, CorpusError> {
         }
     }
     Ok(catalog)
+}
+
+/// Load and cross-check sanitized normalized path fixtures for every profile.
+///
+/// These fixtures exercise catalog normalization and solver-view boundaries;
+/// they do not assert that upstream bytes were downloaded or are executable.
+///
+/// # Errors
+///
+/// Returns JSON, schema, coverage, duplicate, unsafe-path, exposure, or empty
+/// manifest errors. Loading performs no network access.
+pub fn bundled_recorded_corpus_fixtures() -> Result<RecordedCorpusFixtureCatalog, CorpusError> {
+    let profiles = bundled_corpus_profiles()?;
+    let catalog: RecordedCorpusFixtureCatalog = serde_json::from_str(include_str!(
+        "../../../fixtures/corpora/recorded-profile-manifests.json"
+    ))?;
+    if catalog.schema_version != "hsai.recorded-corpus-fixture-catalog.v1" {
+        return Err(CorpusError::InvalidProfile {
+            profile_id: "recorded-fixtures".to_owned(),
+            reason: "unsupported fixture schema version".to_owned(),
+        });
+    }
+    let expected = profiles
+        .profiles
+        .iter()
+        .map(|profile| profile.profile_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut actual = std::collections::BTreeSet::new();
+    for fixture in &catalog.fixtures {
+        let paths_valid = fixture
+            .normalized_public_paths
+            .iter()
+            .chain(&fixture.protected_paths)
+            .all(|path| safe_normalized_path(path));
+        let overlap = fixture
+            .normalized_public_paths
+            .iter()
+            .any(|path| fixture.protected_paths.contains(path));
+        let public_exposes_secret = fixture.normalized_public_paths.iter().any(|path| {
+            let lower = path.to_ascii_lowercase();
+            ["flag", "solution", "solve", "writeup", "server_files"]
+                .iter()
+                .any(|marker| lower.contains(marker))
+        });
+        if !actual.insert(fixture.profile_id.as_str())
+            || fixture.challenge_ref.is_empty()
+            || fixture.normalized_public_paths.is_empty()
+            || fixture.protected_paths.is_empty()
+            || fixture.verifier_status.is_empty()
+            || !paths_valid
+            || overlap
+            || public_exposes_secret
+        {
+            return Err(CorpusError::InvalidProfile {
+                profile_id: fixture.profile_id.clone(),
+                reason: "unsafe or incomplete recorded normalized manifest".to_owned(),
+            });
+        }
+    }
+    if actual != expected {
+        return Err(CorpusError::InvalidProfile {
+            profile_id: "recorded-fixtures".to_owned(),
+            reason: "recorded fixtures do not cover every corpus profile exactly once".to_owned(),
+        });
+    }
+    Ok(catalog)
+}
+
+fn safe_normalized_path(path: &str) -> bool {
+    !path.is_empty()
+        && !path.starts_with('/')
+        && !path.contains('\0')
+        && !path.contains('\\')
+        && !path.split('/').any(|component| component == "..")
 }
 
 /// Versioned port for immutable challenge corpus materialization.
@@ -489,6 +589,20 @@ mod tests {
         assert!(catalog.profiles.iter().all(|profile| {
             profile.readiness != SettlementReadiness::SettlementReady && profile.commit.len() == 40
         }));
+        Ok(())
+    }
+
+    #[test]
+    fn contract_recorded_manifests_cover_profiles_and_exclude_secrets()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let catalog = bundled_recorded_corpus_fixtures()?;
+        assert_eq!(catalog.fixtures.len(), 7);
+        assert!(
+            catalog
+                .fixtures
+                .iter()
+                .all(|fixture| { fixture.verifier_status.starts_with("NOT_MATERIALIZED:") })
+        );
         Ok(())
     }
 }
