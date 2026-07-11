@@ -73,6 +73,8 @@ pub struct Hip4SideSpec {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct OutcomeMetaEnvelope {
     outcomes: Vec<Hip4OutcomeMeta>,
+    #[serde(default, rename = "questions")]
+    _questions: Vec<serde_json::Value>,
 }
 
 /// Failures from checked HIP-4 parsing and mock settlement behavior.

@@ -110,12 +110,12 @@ must pause.
 |---|---|---|---|---|
 | TM-001 | Malicious/compromised source; pinned bytes and reliable completeness are assumed | Immutable refs, digests, cursor/pagination model, rights/readiness gating | Gap/equivocation evidence; pause observation and negative finality | Live completeness absent; blocks production settlement |
 | TM-002 | Forged/backdated/withdrawn/duplicate/oversized candidate; source identity/time is assumed | Identity/replacement policy, timestamps, size/type admission, dedupe | Admission and observation records; quarantine and recompute | External timestamp authenticity varies; blocks affected sources |
-| TM-003 | Compromised validator/dependency or candidate RCE/sandbox escape; isolation is assumed | Digest-pinned structured runner policy, no shell, network/resource controls | ERROR classification, manifests, heartbeat/lost-worker handling; quarantine tuple | Scripted runner is not hostile-code isolation; blocks production |
-| TM-004 | Path traversal, symlink/archive/parser exploit or bomb; importer safety is assumed | Solver-view exclusion, profile validation, planned allowlisted extraction limits | Materialization failure and digest audit; quarantine artifact | External byte materializer not built; blocks external execution |
+| TM-003 | Compromised validator/dependency or candidate RCE/sandbox escape; isolation is assumed | Digest-pinned structured runner policy plus tested Docker non-root/read-only/no-network/capability/resource controls | ERROR classification, manifests, heartbeat/lost-worker handling; quarantine tuple | Control-plane probe is not the full candidate verifier backend; blocks production |
+| TM-004 | Path traversal, symlink/archive/parser exploit or bomb; importer safety is assumed | Solver-view exclusion plus tested pinned-checkout path, symlink, protected-content, race, count, and byte limits | Materialization failure and digest audit; quarantine artifact | Submodule/LFS/archive/image materializers are absent; blocks those inputs |
 | TM-005 | Nondeterminism/time/randomness/architecture drift; replay tier is assumed achievable | Frozen environment/time/seed, semantic replay count, typed INCONCLUSIVE/ERROR | Divergent manifests; dispute/pause and new claim if policy changes | Cross-host determinism requires production qualification |
 | TM-006 | Runner/attestor collusion, signer theft/misuse/replay; quorum independence is assumed | 2-of-3 policy support, duplicate signer rejection, key validity times, domain-separated signatures | Signature verification/equivocation records; revoke, rotate, pause | Local dev keys are ephemeral; production KMS/HSM separation blocks readiness |
 | TM-007 | Evidence deletion/substitution/withholding/privacy leakage; durable private storage is assumed | CAS digests, classification, immutable bundle, separate public projection | Standalone verification and availability checks; halt finality, restore and reverify | Filesystem CAS lacks production retention/access controls |
-| TM-008 | Database rollback/audit/outbox tampering; database controls are assumed | Immutable triggers, checksummed migrations, transactional event/audit/outbox | Sequence/checksum/outbox reconciliation; restore paired DB/object backup | PostgreSQL execution and HA controls not verified; blocks production |
+| TM-008 | Database rollback/audit/outbox tampering; database controls are assumed | Tested PostgreSQL/SQLite immutable triggers, checksummed migrations, transactional event/audit/outbox | Sequence/checksum/outbox reconciliation; restore paired DB/object backup | Production HA and paired restore drills remain unverified |
 | TM-009 | Stale/wrong HIP-4 network/side/outcome/mapping/authority | Checked IDs, explicit mapping, network-scoped binding, metadata digest, authority requirement | Preflight/reconciliation mismatch; invalidate binding and pause | External metadata/API correctness and authority remain external |
 | TM-010 | Duplicate/ambiguous settlement response or API reorganization | Deterministic idempotency, persist-before-submit contract, status-before-retry, mainnet disabled | Receipt/status digest reconciliation; operator pause and escalation | Mock proves logic only; no verified live publisher exists |
 | TM-011 | DoS and expensive-candidate griefing; capacity controls are assumed | Size/resource/time limits, bounded jobs/retries/dead letter, admission budgets | Queue/outcome/lag metrics; throttle/quarantine/raise manual review | Production rate limiter and telemetry backend are future work |
@@ -126,16 +126,17 @@ must pause.
 Critical: TM-003, TM-006, TM-009, TM-010 because failure can enable code escape,
 forged finality, or wrong financial effects. High: TM-001, TM-002, TM-005,
 TM-007, TM-008, TM-012 because they can corrupt truth, availability, or audit.
-Medium: TM-004 and TM-011 in the current build because external materialization
-and public production service are not enabled; they become high when enabled.
+Medium: TM-004 and TM-011 in the current build because special-object
+materialization and the public production service are not enabled; they become
+high when enabled.
 
 ## Focus paths
 
 Production promotion must close, in order: (1) deploy and adversarially validate
 the hostile-code sandbox; (2) establish source completeness/time authority for
 one real challenge source; (3) place independent attestor keys in KMS/HSM with
-rotation/revocation drills; (4) execute PostgreSQL and immutable object-store
-backup/restore tests; (5) verify an official HIP-4 testnet resolution action and
+rotation/revocation drills; (4) execute paired PostgreSQL and immutable
+object-store backup/restore drills; (5) verify an official HIP-4 testnet resolution action and
 authorized broadcaster role, or retain manual handoff only; (6) run an authorized
 end-to-end testnet incident/reconciliation exercise. Until then, the honest claim
 ceiling is a tested hermetic protocol and mock settlement boundary.

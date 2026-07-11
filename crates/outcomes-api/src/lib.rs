@@ -4,14 +4,19 @@ use std::{path::PathBuf, sync::Arc};
 
 use axum::{
     Json, Router,
+    body::Bytes,
     extract::{DefaultBodyLimit, Path, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
 use outcomes_application::{LocalScenario, ScenarioReport, run_local_scenario};
-use outcomes_domain::ClaimSpecV1;
-use serde::Serialize;
+use outcomes_domain::{
+    ClaimSpecV1, MarketBindingV1, ResolutionRecordV1, SettlementNetwork, Sha256Digest,
+    domain_separated_digest,
+};
+use outcomes_settlement::{CapabilityMatrix, SettlementPreflight, preflight};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use thiserror::Error;
 
@@ -59,6 +64,18 @@ pub fn router(config: ApiConfig) -> Result<Router, ApiBuildError> {
         .route("/v1/adapters/capabilities", get(capabilities))
         .route("/v1/claims/validate", post(validate_claim))
         .route("/v1/demo/{scenario}", post(run_demo))
+        .route(
+            "/v1/settlement/mock/preflight",
+            post(run_mock_settlement_preflight),
+        )
+        .route(
+            "/v1/settlement/mock/workflow",
+            post(run_mock_settlement_workflow),
+        )
+        .route(
+            "/v1/settlement/mainnet/publish",
+            post(refuse_mainnet_publish),
+        )
         .layer(DefaultBodyLimit::max(1_048_576))
         .with_state(state))
 }
@@ -127,6 +144,161 @@ async fn run_demo(
     Ok(Json(report))
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MockSettlementPreflightRequest {
+    binding: MarketBindingV1,
+    final_resolution: ResolutionRecordV1,
+    current_metadata_digest: Sha256Digest,
+    capabilities: CapabilityMatrix,
+}
+
+#[derive(Debug, Serialize)]
+struct MockSettlementPreflightResponse {
+    backend: &'static str,
+    network: SettlementNetwork,
+    validation_scope: &'static str,
+    external_writes_enabled: bool,
+    preflight: SettlementPreflight,
+}
+
+#[derive(Debug, Serialize)]
+struct MockSettlementWorkflowResponse {
+    backend: &'static str,
+    network: SettlementNetwork,
+    operation: &'static str,
+    report: ScenarioReport,
+}
+
+#[derive(Serialize)]
+struct ResolutionIdentity<'a> {
+    schema_version: &'static str,
+    claim_id: &'a outcomes_domain::ClaimId,
+    truth: outcomes_domain::ClaimTruth,
+    finality: outcomes_domain::ResolutionFinality,
+    evidence_bundle_digest: Sha256Digest,
+    attestation_digests: &'a [Sha256Digest],
+    dispute_window_start: &'a outcomes_domain::UtcTimestamp,
+    dispute_window_end: &'a outcomes_domain::UtcTimestamp,
+}
+
+async fn run_mock_settlement_preflight(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<MockSettlementPreflightResponse>, ApiError> {
+    require_operator(&headers, &state.config.operator_role)?;
+    let request: MockSettlementPreflightRequest =
+        serde_json::from_slice(&body).map_err(|_| ApiError::InvalidSettlementPreflight)?;
+    validate_mock_preflight_request(&request)?;
+    let result = preflight(
+        &request.binding,
+        &request.final_resolution,
+        request.current_metadata_digest,
+        &request.capabilities,
+    );
+    Ok(Json(MockSettlementPreflightResponse {
+        backend: "hyperliquid-hip4",
+        network: SettlementNetwork::Mock,
+        validation_scope: "DIGEST_AND_STATE_ONLY_NO_SIGNATURE_VERIFICATION",
+        external_writes_enabled: false,
+        preflight: result,
+    }))
+}
+
+async fn run_mock_settlement_workflow(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<MockSettlementWorkflowResponse>, ApiError> {
+    require_operator(&headers, &state.config.operator_role)?;
+    if !body.is_empty() {
+        return Err(ApiError::UnexpectedRequestBody);
+    }
+    let artifact_root = state
+        .config
+        .artifact_root
+        .join("operator-api")
+        .join("mock-workflow");
+    let report = run_local_scenario(LocalScenario::True, &artifact_root)
+        .map_err(|_| ApiError::ScenarioFailed)?;
+    Ok(Json(MockSettlementWorkflowResponse {
+        backend: "hyperliquid-hip4",
+        network: SettlementNetwork::Mock,
+        operation: "EXECUTE_AND_RECONCILE_HERMETIC_MOCK",
+        report,
+    }))
+}
+
+async fn refuse_mainnet_publish(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    _body: Bytes,
+) -> Result<Json<Value>, ApiError> {
+    require_operator(&headers, &state.config.operator_role)?;
+    Err(ApiError::MainnetMutationDisabled)
+}
+
+fn validate_mock_preflight_request(
+    request: &MockSettlementPreflightRequest,
+) -> Result<(), ApiError> {
+    if request.binding.network != SettlementNetwork::Mock
+        || request.capabilities.network != SettlementNetwork::Mock
+        || request.binding.backend != "hyperliquid-hip4"
+        || request.capabilities.backend != request.binding.backend
+        || request.binding.schema_version != "hsai.market-binding.v1"
+        || request.final_resolution.schema_version != "hsai.resolution-record.v1"
+    {
+        return Err(ApiError::InvalidSettlementPreflight);
+    }
+
+    let capability_digest =
+        domain_separated_digest("hsai.backend-capability.v1", &request.capabilities)
+            .map_err(|_| ApiError::InvalidSettlementPreflight)?;
+    if capability_digest != request.binding.capability_snapshot_digest {
+        return Err(ApiError::InvalidSettlementPreflight);
+    }
+
+    let binding_identity = (
+        &request.binding.backend,
+        request.binding.network,
+        &request.binding.external_market_id,
+        &request.binding.external_question_id,
+        request.binding.external_metadata_digest,
+        &request.binding.claim_id,
+        request.binding.claim_spec_digest,
+        request.binding.true_side_index,
+        request.binding.false_side_index,
+        request.binding.capability_snapshot_digest,
+    );
+    let binding_digest = domain_separated_digest("hsai.market-binding.v1", &binding_identity)
+        .map_err(|_| ApiError::InvalidSettlementPreflight)?;
+    if binding_digest != request.binding.binding_digest {
+        return Err(ApiError::InvalidSettlementPreflight);
+    }
+
+    let resolution_identity = ResolutionIdentity {
+        schema_version: "hsai.resolution-record.v1",
+        claim_id: &request.final_resolution.claim_id,
+        truth: request.final_resolution.truth,
+        finality: request.final_resolution.finality,
+        evidence_bundle_digest: request.final_resolution.evidence_bundle_digest,
+        attestation_digests: &request.final_resolution.attestation_digests,
+        dispute_window_start: &request.final_resolution.dispute_window_start,
+        dispute_window_end: &request.final_resolution.dispute_window_end,
+    };
+    let resolution_digest =
+        domain_separated_digest("hsai.resolution-record.v1", &resolution_identity)
+            .map_err(|_| ApiError::InvalidSettlementPreflight)?;
+    let expected_resolution_id = format!("resolution_{}", &resolution_digest.to_hex()[..32]);
+    if resolution_digest != request.final_resolution.record_digest
+        || expected_resolution_id != request.final_resolution.resolution_id
+    {
+        return Err(ApiError::InvalidSettlementPreflight);
+    }
+    Ok(())
+}
+
 fn require_operator(headers: &HeaderMap, expected_role: &str) -> Result<(), ApiError> {
     let role = headers
         .get("x-hsai-role")
@@ -148,22 +320,65 @@ enum ApiError {
     UnknownScenario,
     #[error("scenario failed")]
     ScenarioFailed,
+    #[error("invalid mock settlement preflight")]
+    InvalidSettlementPreflight,
+    #[error("request body is not accepted for this operation")]
+    UnexpectedRequestBody,
+    #[error("mainnet mutation is structurally disabled")]
+    MainnetMutationDisabled,
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let (status, code) = match self {
-            Self::Forbidden => (StatusCode::FORBIDDEN, "FORBIDDEN"),
-            Self::InvalidClaim => (StatusCode::UNPROCESSABLE_ENTITY, "INVALID_CLAIM"),
-            Self::UnknownScenario => (StatusCode::NOT_FOUND, "UNKNOWN_SCENARIO"),
-            Self::ScenarioFailed => (StatusCode::INTERNAL_SERVER_ERROR, "SCENARIO_FAILED"),
+        let (status, code, message) = match self {
+            Self::Forbidden => (StatusCode::FORBIDDEN, "FORBIDDEN", "operator role required"),
+            Self::InvalidClaim => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "INVALID_CLAIM",
+                "claim schema or identity is invalid",
+            ),
+            Self::UnknownScenario => (
+                StatusCode::NOT_FOUND,
+                "UNKNOWN_SCENARIO",
+                "unknown local scenario",
+            ),
+            Self::ScenarioFailed => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "SCENARIO_FAILED",
+                "hermetic scenario failed",
+            ),
+            Self::InvalidSettlementPreflight => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "INVALID_MOCK_SETTLEMENT_PREFLIGHT",
+                "mock preflight input failed schema, network, or digest validation",
+            ),
+            Self::UnexpectedRequestBody => (
+                StatusCode::BAD_REQUEST,
+                "UNEXPECTED_REQUEST_BODY",
+                "this operation accepts no request body or signing material",
+            ),
+            Self::MainnetMutationDisabled => (
+                StatusCode::CONFLICT,
+                "MAINNET_MUTATION_DISABLED",
+                "mainnet mutation is structurally disabled",
+            ),
         };
-        (status, Json(json!({"error_code": code}))).into_response()
+        (
+            status,
+            Json(json!({
+                "error_code": code,
+                "message": message,
+                "retryable": false
+            })),
+        )
+            .into_response()
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use axum::{
         body::{Body, to_bytes},
         http::Request,
@@ -224,6 +439,173 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn contract_mock_preflight_is_operator_gated_digest_checked_and_effect_free()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let seed_root = directory.path().join("seed");
+        let seed_report = run_local_scenario(LocalScenario::True, &seed_root)?;
+        assert_eq!(seed_report.mock_effect_count, 1);
+        let binding: MarketBindingV1 =
+            serde_json::from_slice(&fs::read(seed_root.join("market-binding.json"))?)?;
+        let final_resolution: ResolutionRecordV1 =
+            serde_json::from_slice(&fs::read(seed_root.join("final-resolution.json"))?)?;
+        let capabilities: CapabilityMatrix =
+            serde_json::from_slice(&fs::read(seed_root.join("hip4-capabilities.json"))?)?;
+        let body = serde_json::to_vec(&json!({
+            "binding": binding,
+            "final_resolution": final_resolution,
+            "current_metadata_digest": binding.external_metadata_digest,
+            "capabilities": capabilities,
+        }))?;
+        let app = test_router(directory.path().to_path_buf())?;
+
+        let denied = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/settlement/mock/preflight")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))?,
+            )
+            .await?;
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+
+        let allowed = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/settlement/mock/preflight")
+                    .header("x-hsai-role", "operator")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.clone()))?,
+            )
+            .await?;
+        assert_eq!(allowed.status(), StatusCode::OK);
+        let bytes = to_bytes(allowed.into_body(), 1_048_576).await?;
+        let response: Value = serde_json::from_slice(&bytes)?;
+        assert_eq!(response["preflight"]["ready"], true);
+        assert_eq!(response["external_writes_enabled"], false);
+        assert_eq!(
+            response["validation_scope"],
+            "DIGEST_AND_STATE_ONLY_NO_SIGNATURE_VERIFICATION"
+        );
+        assert!(!directory.path().join("operator-api").exists());
+
+        let mut signing_material: Value = serde_json::from_slice(&body)?;
+        signing_material["private_key"] = json!("must-not-be-accepted");
+        let signing_material_rejected = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/settlement/mock/preflight")
+                    .header("x-hsai-role", "operator")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&signing_material)?))?,
+            )
+            .await?;
+        assert_eq!(
+            signing_material_rejected.status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+
+        let mut tampered: Value = serde_json::from_slice(&body)?;
+        tampered["binding"]["external_market_id"] = json!("tampered");
+        let rejected = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/settlement/mock/preflight")
+                    .header("x-hsai-role", "operator")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&tampered)?))?,
+            )
+            .await?;
+        assert_eq!(rejected.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let bytes = to_bytes(rejected.into_body(), 16_384).await?;
+        let error: Value = serde_json::from_slice(&bytes)?;
+        assert_eq!(error["error_code"], "INVALID_MOCK_SETTLEMENT_PREFLIGHT");
+        assert_eq!(error["retryable"], false);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn contract_mock_workflow_accepts_no_signing_input_and_remains_hermetic()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let app = test_router(directory.path().to_path_buf())?;
+        let body_rejected = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/settlement/mock/workflow")
+                    .header("x-hsai-role", "operator")
+                    .body(Body::from(r#"{"private_key":"must-not-be-accepted"}"#))?,
+            )
+            .await?;
+        assert_eq!(body_rejected.status(), StatusCode::BAD_REQUEST);
+
+        let allowed = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/settlement/mock/workflow")
+                    .header("x-hsai-role", "operator")
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(allowed.status(), StatusCode::OK);
+        let bytes = to_bytes(allowed.into_body(), 1_048_576).await?;
+        let response: Value = serde_json::from_slice(&bytes)?;
+        assert_eq!(response["network"], "MOCK");
+        assert_eq!(response["report"]["mock_effect_count"], 1);
+        assert_eq!(response["report"]["reconciliation_status"], "CONFIRMED");
+        assert!(
+            response["report"]["external_effect"]
+                .as_str()
+                .is_some_and(|value| value.contains("no testnet or mainnet write"))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn contract_mainnet_publish_refusal_is_operator_gated_and_unconditional()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let app = test_router(directory.path().to_path_buf())?;
+        let denied = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/settlement/mainnet/publish")
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+
+        let refused = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/settlement/mainnet/publish")
+                    .header("x-hsai-role", "operator")
+                    .body(Body::from(r#"{"private_key":"ignored-not-parsed"}"#))?,
+            )
+            .await?;
+        assert_eq!(refused.status(), StatusCode::CONFLICT);
+        let bytes = to_bytes(refused.into_body(), 16_384).await?;
+        let error: Value = serde_json::from_slice(&bytes)?;
+        assert_eq!(error["error_code"], "MAINNET_MUTATION_DISABLED");
+        assert_eq!(error["retryable"], false);
+        assert!(!String::from_utf8(bytes.to_vec())?.contains("ignored-not-parsed"));
+        Ok(())
+    }
+
     #[test]
     fn contract_openapi_matches_implemented_routes() -> Result<(), Box<dyn std::error::Error>> {
         let document: Value = serde_json::from_str(OPENAPI_JSON)?;
@@ -236,10 +618,24 @@ mod tests {
             "/v1/adapters/capabilities",
             "/v1/claims/validate",
             "/v1/demo/{scenario}",
+            "/v1/settlement/mock/preflight",
+            "/v1/settlement/mock/workflow",
+            "/v1/settlement/mainnet/publish",
         ] {
             assert!(paths.contains_key(path), "missing OpenAPI path {path}");
         }
-        assert_eq!(paths.len(), 5);
+        assert_eq!(paths.len(), 8);
+        for path in [
+            "/v1/settlement/mock/preflight",
+            "/v1/settlement/mock/workflow",
+            "/v1/settlement/mainnet/publish",
+        ] {
+            assert!(paths[path].get("post").is_some(), "{path} must be POST");
+            assert_eq!(
+                paths[path]["post"]["parameters"][0]["name"], "x-hsai-role",
+                "{path} must document the operator role boundary"
+            );
+        }
         Ok(())
     }
 }

@@ -19,3 +19,22 @@ making existing immutable public evidence unavailable.
 `.env.example` contains placeholders only. Private keys must never be passed on
 the CLI, stored in environment files, or logged. Mainnet write configuration has
 no supported code path.
+
+The migration contract can be rerun against an operator-supplied disposable
+database without changing the default hermetic gate:
+
+```sh
+HSAI_TEST_POSTGRES_URL=postgres://... pnpm run verify:infra-postgres
+```
+
+The Docker control-plane probe requires an already-present immutable image and
+does not fetch, mount, network, or execute candidate content:
+
+```sh
+HSAI_TEST_OCI_IMAGE_REPOSITORY=alpine \
+HSAI_TEST_OCI_IMAGE_DIGEST=sha256:... \
+pnpm run verify:infra-oci
+```
+
+Passing this probe establishes daemon control enforcement, not production
+candidate-verifier readiness.

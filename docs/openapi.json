@@ -23,6 +23,66 @@
         "parameters": [{"name": "scenario", "in": "path", "required": true, "schema": {"type": "string", "enum": ["true", "false", "runner-error"]}}],
         "responses": {"200": {"description": "Local scenario report"}, "403": {"description": "Operator role required"}, "404": {"description": "Unknown scenario"}}
       }
+    },
+    "/v1/settlement/mock/preflight": {
+      "post": {
+        "operationId": "preflightHermeticMockSettlement",
+        "description": "Operator-gated, effect-free digest and state preflight for exact MOCK binding, final-resolution, metadata-digest, and capability records. This endpoint does not verify signatures and performs no network operation.",
+        "parameters": [
+          {"name": "x-hsai-role", "in": "header", "required": true, "schema": {"type": "string"}}
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["binding", "final_resolution", "current_metadata_digest", "capabilities"],
+                "properties": {
+                  "binding": {"$ref": "../schemas/market-binding-v1.schema.json"},
+                  "final_resolution": {"$ref": "../schemas/resolution-record-v1.schema.json"},
+                  "current_metadata_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                  "capabilities": {"type": "object", "description": "Exact dated backend capability matrix bound by binding.capability_snapshot_digest"}
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {"description": "Effect-free mock settlement preflight result"},
+          "403": {"description": "Operator role required"},
+          "422": {"description": "Schema, MOCK network, backend, or digest validation failed"}
+        }
+      }
+    },
+    "/v1/settlement/mock/workflow": {
+      "post": {
+        "operationId": "runHermeticMockSettlementWorkflow",
+        "description": "Operator-gated hermetic TRUE claim workflow. Accepts no request body or signing material, performs one idempotent in-memory mock effect, reconciles it, and performs no live network operation.",
+        "parameters": [
+          {"name": "x-hsai-role", "in": "header", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {
+          "200": {"description": "Hermetic mock workflow and reconciliation report"},
+          "400": {"description": "Request body or signing material was supplied"},
+          "403": {"description": "Operator role required"},
+          "500": {"description": "Hermetic workflow failed"}
+        }
+      }
+    },
+    "/v1/settlement/mainnet/publish": {
+      "post": {
+        "operationId": "refuseMainnetSettlementPublish",
+        "description": "Operator-gated structural refusal surface. The implementation never parses signing material, constructs a client, or performs a network operation.",
+        "parameters": [
+          {"name": "x-hsai-role", "in": "header", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {
+          "403": {"description": "Operator role required"},
+          "409": {"description": "MAINNET_MUTATION_DISABLED; retryable=false"}
+        }
+      }
     }
   }
 }

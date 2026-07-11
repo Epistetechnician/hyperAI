@@ -23,6 +23,13 @@ official mainnet and testnet Info endpoints. The documentation/rollout mismatch
 is capability uncertainty, not write authority or an SLA. The implementation
 uses the documented list request and treats outcome IDs as network-scoped.
 
+On 2026-07-11, a bounded credential-free testnet read returned an object with
+both `outcomes` and `questions`; the first sampled outcome used quote token
+`USDH`, reinforcing that collateral cannot be hardcoded. A bare
+`{"type":"settledOutcome"}` request returned HTTP 422, and no current primary
+source documented its required fields. The settled-outcome client therefore
+remains disabled instead of guessing.
+
 ## Challenge corpora and harnesses
 
 - [NYU CTF Bench](https://github.com/NYU-LLM-CTF/NYU_CTF_Bench)

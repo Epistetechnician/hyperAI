@@ -1,6 +1,9 @@
 //! Durable job, lease, outbox, and recovery composition.
 
-use outcomes_domain::{Sha256Digest, UtcTimestamp};
+use outcomes_domain::{
+    ClaimTruth, ExecutionOutcome, ResolutionFinality, SettlementLifecycle, Sha256Digest,
+    UtcTimestamp,
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -18,6 +21,186 @@ pub enum JobStatus {
     Completed,
     /// Terminal quarantine requiring operator visibility.
     DeadLetter,
+}
+
+/// Fixed-cardinality operational snapshot safe for metrics export.
+///
+/// It intentionally contains no claim IDs, candidate IDs, wallet addresses,
+/// signer references, filesystem paths, or raw error payloads.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OperationalSnapshot {
+    /// Snapshot generation time.
+    pub generated_at: UtcTimestamp,
+    /// Claim truth counters.
+    pub claims: ClaimCounters,
+    /// Resolution finality counters.
+    pub finality: FinalityCounters,
+    /// Normalized verifier outcome counters.
+    pub verification: VerificationCounters,
+    /// Durable job-state counters.
+    pub jobs: JobCounters,
+    /// Settlement lifecycle counters.
+    pub settlement: SettlementCounters,
+    /// Current transactional-outbox backlog.
+    pub outbox_backlog: u64,
+    /// Denied operator/API requests.
+    pub unauthorized_attempts: u64,
+}
+
+/// Fixed claim-truth dimensions.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimCounters {
+    /// Final or provisional TRUE observations.
+    pub true_count: u64,
+    /// Final or provisional FALSE observations.
+    pub false_count: u64,
+    /// Claims whose evidence cannot currently decide truth.
+    pub unresolved_count: u64,
+}
+
+/// Fixed finality dimensions.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FinalityCounters {
+    /// No proposal.
+    pub none_count: u64,
+    /// Provisional records.
+    pub provisional_count: u64,
+    /// Actively disputed records.
+    pub disputed_count: u64,
+    /// Final records.
+    pub final_count: u64,
+}
+
+/// Fixed verifier dimensions.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VerificationCounters {
+    /// Accepted executions.
+    pub pass_count: u64,
+    /// Correct deterministic rejections.
+    pub fail_count: u64,
+    /// Semantically undecidable executions.
+    pub inconclusive_count: u64,
+    /// Infrastructure/runner/adapter failures.
+    pub error_count: u64,
+}
+
+/// Fixed durable-job dimensions.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JobCounters {
+    /// Queued jobs.
+    pub queued_count: u64,
+    /// Leased jobs.
+    pub running_count: u64,
+    /// Jobs awaiting bounded retry.
+    pub retry_wait_count: u64,
+    /// Completed jobs.
+    pub completed_count: u64,
+    /// Quarantined terminal jobs.
+    pub dead_letter_count: u64,
+}
+
+/// Fixed settlement lifecycle dimensions.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SettlementCounters {
+    /// Unbound claims.
+    pub unbound_count: u64,
+    /// Bound claims.
+    pub bound_count: u64,
+    /// Blocked preflight states.
+    pub not_ready_count: u64,
+    /// Ready states.
+    pub ready_count: u64,
+    /// Persisted unsigned intents.
+    pub intent_built_count: u64,
+    /// Submitted effects.
+    pub submitted_count: u64,
+    /// Confirmed effects.
+    pub confirmed_count: u64,
+    /// Failed/ambiguous reconciliation.
+    pub reconciliation_failed_count: u64,
+    /// Operator-paused states.
+    pub paused_count: u64,
+}
+
+impl OperationalSnapshot {
+    /// Construct an empty snapshot at an injected canonical time.
+    #[must_use]
+    pub fn new(generated_at: UtcTimestamp) -> Self {
+        Self {
+            generated_at,
+            claims: ClaimCounters::default(),
+            finality: FinalityCounters::default(),
+            verification: VerificationCounters::default(),
+            jobs: JobCounters::default(),
+            settlement: SettlementCounters::default(),
+            outbox_backlog: 0,
+            unauthorized_attempts: 0,
+        }
+    }
+
+    /// Record one claim projection using fixed enum dimensions.
+    pub fn observe_claim(&mut self, truth: ClaimTruth, finality: ResolutionFinality) {
+        match truth {
+            ClaimTruth::True => increment(&mut self.claims.true_count),
+            ClaimTruth::False => increment(&mut self.claims.false_count),
+            ClaimTruth::Unresolved => increment(&mut self.claims.unresolved_count),
+        }
+        match finality {
+            ResolutionFinality::None => increment(&mut self.finality.none_count),
+            ResolutionFinality::Provisional => increment(&mut self.finality.provisional_count),
+            ResolutionFinality::Disputed => increment(&mut self.finality.disputed_count),
+            ResolutionFinality::Final => increment(&mut self.finality.final_count),
+        }
+    }
+
+    /// Record one normalized verifier outcome.
+    pub fn observe_verification(&mut self, outcome: ExecutionOutcome) {
+        match outcome {
+            ExecutionOutcome::Pass => increment(&mut self.verification.pass_count),
+            ExecutionOutcome::Fail => increment(&mut self.verification.fail_count),
+            ExecutionOutcome::Inconclusive => {
+                increment(&mut self.verification.inconclusive_count);
+            }
+            ExecutionOutcome::Error => increment(&mut self.verification.error_count),
+        }
+    }
+
+    /// Record one durable job projection.
+    pub fn observe_job(&mut self, status: JobStatus) {
+        match status {
+            JobStatus::Queued => increment(&mut self.jobs.queued_count),
+            JobStatus::Running => increment(&mut self.jobs.running_count),
+            JobStatus::RetryWait => increment(&mut self.jobs.retry_wait_count),
+            JobStatus::Completed => increment(&mut self.jobs.completed_count),
+            JobStatus::DeadLetter => increment(&mut self.jobs.dead_letter_count),
+        }
+    }
+
+    /// Record one settlement lifecycle projection.
+    pub fn observe_settlement(&mut self, lifecycle: SettlementLifecycle) {
+        match lifecycle {
+            SettlementLifecycle::Unbound => increment(&mut self.settlement.unbound_count),
+            SettlementLifecycle::Bound => increment(&mut self.settlement.bound_count),
+            SettlementLifecycle::NotReady => increment(&mut self.settlement.not_ready_count),
+            SettlementLifecycle::Ready => increment(&mut self.settlement.ready_count),
+            SettlementLifecycle::IntentBuilt => increment(&mut self.settlement.intent_built_count),
+            SettlementLifecycle::Submitted => increment(&mut self.settlement.submitted_count),
+            SettlementLifecycle::Confirmed => increment(&mut self.settlement.confirmed_count),
+            SettlementLifecycle::ReconciliationFailed => {
+                increment(&mut self.settlement.reconciliation_failed_count);
+            }
+            SettlementLifecycle::Paused => increment(&mut self.settlement.paused_count),
+        }
+    }
+
+    /// Record one denied operator action without retaining actor identity.
+    pub fn observe_unauthorized_attempt(&mut self) {
+        increment(&mut self.unauthorized_attempts);
+    }
+}
+
+fn increment(value: &mut u64) {
+    *value = value.saturating_add(1);
 }
 
 /// Versioned durable job projection.
@@ -229,6 +412,36 @@ mod tests {
         }
         assert_eq!(job.status, JobStatus::DeadLetter);
         assert_eq!(job.attempt_count, 3);
+        Ok(())
+    }
+
+    #[test]
+    fn contract_operational_snapshot_has_only_fixed_cardinality_dimensions()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut snapshot = OperationalSnapshot::new(timestamp("2026-07-11T01:00:00Z")?);
+        snapshot.observe_claim(ClaimTruth::True, ResolutionFinality::Final);
+        snapshot.observe_claim(ClaimTruth::Unresolved, ResolutionFinality::None);
+        snapshot.observe_verification(ExecutionOutcome::Pass);
+        snapshot.observe_verification(ExecutionOutcome::Error);
+        snapshot.observe_job(JobStatus::DeadLetter);
+        snapshot.observe_settlement(SettlementLifecycle::Confirmed);
+        snapshot.observe_unauthorized_attempt();
+        let json = serde_json::to_string(&snapshot)?;
+        assert_eq!(snapshot.claims.true_count, 1);
+        assert_eq!(snapshot.claims.unresolved_count, 1);
+        assert_eq!(snapshot.verification.error_count, 1);
+        assert_eq!(snapshot.jobs.dead_letter_count, 1);
+        assert_eq!(snapshot.settlement.confirmed_count, 1);
+        assert_eq!(snapshot.unauthorized_attempts, 1);
+        for prohibited in [
+            "claim_id",
+            "candidate_id",
+            "wallet",
+            "raw_error",
+            "signer_ref",
+        ] {
+            assert!(!json.contains(prohibited));
+        }
         Ok(())
     }
 }

@@ -14,7 +14,11 @@ promote ambiguous item-level rights.
 Current external profiles validate catalog, pin, exclusion, rights, and
 readiness metadata. Sanitized normalized recorded path manifests cover every
 profile in `fixtures/corpora/recorded-profile-manifests.json`; they exercise
-solver-view separation without copying upstream challenge content. Profiles do
-not yet clone/materialize upstream challenge bytes,
-resolve submodules/LFS/images, or prove a runnable verifier. They therefore
+solver-view separation without copying upstream challenge content. The local
+materializer can read deterministic regular-file manifests from an explicitly
+provided absolute checkout whose expected and observed commits match the profile.
+It rejects unsafe paths, symlinks, protected content, filesystem changes, and
+resource-limit overflow without invoking Git, network, or executables. Profiles
+do not yet clone upstream bytes, resolve submodules/LFS/archives/images, or prove
+a runnable verifier. They therefore
 remain `EVALUATION_ONLY` or `CATALOG_ONLY` and cannot drive settlement.

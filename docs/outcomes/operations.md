@@ -8,8 +8,11 @@ claim truth/finality/settlement states, observation lag, duplicate/rejected
 candidates, queue depth, verifier outcomes, replay divergence, evidence failures,
 quorum latency/conflicts, disputes, settlement lifecycle, API freshness/rate
 limits, outbox backlog, dead letters, pauses, and denied operator requests.
-Telemetry exporters are future production work; the state records needed to
-derive these signals are modeled now.
+`outcomes-worker::OperationalSnapshot` provides fixed-cardinality counters for
+truth, finality, verification outcomes, jobs, settlement lifecycle, outbox
+backlog, and denied operations. It structurally contains no claim/candidate IDs,
+wallets, signer references, paths, or raw errors. Telemetry exporters, tracing,
+alerting, and retention remain production deployment work.
 
 ## Key rotation
 
@@ -53,4 +56,6 @@ verification, then clear readiness. A database row is not evidence availability.
 Record migration checksums. Apply forward migrations before workers. Roll back
 application binaries only when schema compatibility is documented; never delete
 append-only evidence/audit rows. Restore testing must cover database plus object
-store consistency.
+store consistency. Migrations 0001 and 0002 have been executed against ephemeral
+PostgreSQL 16, including settlement recovery tables, uniqueness, and append-only
+triggers; production upgrade/restore drills remain required.

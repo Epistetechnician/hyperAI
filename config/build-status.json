@@ -1,18 +1,23 @@
 {
   "schema_version": "hsai.build-status.v1",
-  "verified_at": "2026-07-10T00:00:00Z",
+  "verified_at": "2026-07-11T00:00:00Z",
   "items": [
     {"slice":"claim-domain-and-canonicalization","status":"TESTED","evidence":"cargo test -p outcomes-domain"},
     {"slice":"local-observation-runner-evidence-resolution","status":"TESTED","evidence":"cargo test -p outcomes-application"},
     {"slice":"sqlite-eventing-and-filesystem-cas","status":"TESTED","evidence":"pnpm run verify:contracts"},
-    {"slice":"postgres-migration-execution","status":"EXTERNALLY_BLOCKED","evidence":"migration SQL exists; no PostgreSQL service available locally"},
+    {"slice":"postgres-migration-execution","status":"TESTED","evidence":"0001 and 0002 applied to ephemeral pinned PostgreSQL 16; isolated-schema ignored contract test passed; 36 public tables and append-only triggers verified"},
     {"slice":"external-corpus-profiles","status":"TESTED","evidence":"profile schema, pins, sanitized normalized recorded manifests, solver-view boundaries, conformance tests, and truthful readiness records"},
-    {"slice":"external-corpus-byte-materialization","status":"FUTURE","evidence":"no upstream clone, submodule, LFS, archive, or OCI materialization in this build"},
-    {"slice":"hip4-recorded-and-live-readonly-metadata","status":"TESTED","evidence":"outcomeMeta recorded parser tested; live outcomeMeta client compiles behind live-readonly and is not a default test dependency; settledOutcome client is future work"},
+    {"slice":"external-corpus-local-byte-materialization","status":"TESTED","evidence":"already-pinned absolute local checkout roots materialize deterministic regular-file manifests with commit, root, path, symlink, protected-content, race, count, and byte ceilings; no network or execution"},
+    {"slice":"external-corpus-special-object-materialization","status":"FUTURE","evidence":"Git clone/ref resolution, submodule, LFS, nested archive, and OCI image materialization are not implemented"},
+    {"slice":"hip4-recorded-and-live-readonly-metadata","status":"TESTED","evidence":"outcomeMeta recorded parser tested; bounded 2026-07-11 testnet shape smoke confirmed outcomes plus questions and non-hardcoded quote token; live client compiles behind live-readonly; settledOutcome remains disabled after undocumented bare request returned 422"},
     {"slice":"hip4-mock-settlement-and-reconciliation","status":"TESTED","evidence":"idempotency, stale binding, crash recovery, and mainnet refusal tests"},
+    {"slice":"settlement-persistence-and-restart-recovery","status":"TESTED","evidence":"persist-before-submit intents, unique request/idempotency/receipt identities, append-only receipts/reconciliation, audit/outbox, and query-before-retry recovery pass SQLite and PostgreSQL contracts"},
+    {"slice":"operator-settlement-api-and-cli","status":"TESTED","evidence":"operator-gated mock preflight/workflow, artifact-driven CLI preflight/intent/dry-run/reconcile, signing-material rejection, OpenAPI drift, and unconditional mainnet refusal tests"},
     {"slice":"hip4-testnet-publisher","status":"EXTERNALLY_BLOCKED","evidence":"UNSUPPORTED_UNVERIFIED capability"},
-    {"slice":"hip4-mainnet-publisher","status":"FUTURE","evidence":"structurally disabled and out of scope"},
-    {"slice":"production-hostile-code-sandbox","status":"FUTURE","evidence":"typed OCI policy boundary and scripted runner exist; no production sandbox backend"},
-    {"slice":"production-observability-and-ha","status":"FUTURE","evidence":"operational contract documented; telemetry backend not implemented"}
+    {"slice":"hip4-mainnet-mutation-refusal","status":"TESTED","evidence":"backend, API, and CLI reject mainnet before signer or network processing"},
+    {"slice":"oci-control-plane-enforcement","status":"TESTED","evidence":"structured Docker create plan and live daemon probe enforce immutable image, non-root, read-only rootfs, no network, dropped capabilities, no-new-privileges, bounded pids/memory/CPU/tmpfs/timeout, no mounts or shell"},
+    {"slice":"production-hostile-code-verifier-backend","status":"FUTURE","evidence":"Docker control-plane probe is not yet the candidate execution/output-normalization backend"},
+    {"slice":"fixed-cardinality-operational-snapshot","status":"TESTED","evidence":"claim, finality, verification, job, settlement, outbox, and unauthorized counters contain no identifiers, wallets, signer refs, paths, or raw errors"},
+    {"slice":"production-telemetry-export-and-ha","status":"FUTURE","evidence":"metrics exporter, tracing backend, alerting, production IAM, rate limiting, TLS, HA, and disaster-recovery automation remain deployment work"}
   ]
 }

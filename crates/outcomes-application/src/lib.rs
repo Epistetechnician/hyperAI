@@ -372,6 +372,18 @@ pub fn run_local_scenario(
             backend.reconcile(&binding, &final_record, dispute_end.checked_add_seconds(1)?)?;
         for (name, value) in [
             ("market-binding.json", serde_json::to_value(&binding)?),
+            (
+                "final-resolution.json",
+                serde_json::to_value(&final_record)?,
+            ),
+            (
+                "hip4-capabilities.json",
+                serde_json::to_value(&capabilities)?,
+            ),
+            (
+                "settlement-preflight.json",
+                serde_json::to_value(&readiness)?,
+            ),
             ("settlement-intent.json", serde_json::to_value(&intent)?),
             ("settlement-handoff.json", serde_json::to_value(&handoff)?),
             ("mock-receipt.json", serde_json::to_value(&receipt)?),

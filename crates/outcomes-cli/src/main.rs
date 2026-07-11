@@ -6,8 +6,13 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use hyperliquid_hip4::{Hip4ReadOnlyBackend, decode_asset_id, encode_asset_ids};
 use outcomes_application::{LocalScenario, run_local_scenario};
 use outcomes_blobstore::FileBlobStore;
-use outcomes_domain::{ClaimSpecDraftV1, ClaimSpecV1, OutcomeEvidenceBundleV1, SettlementNetwork};
+use outcomes_domain::{
+    ClaimSpecDraftV1, ClaimSpecV1, MarketBindingV1, OutcomeEvidenceBundleV1,
+    ReconciliationResultV1, ResolutionRecordV1, SettlementNetwork, UnsignedSettlementIntentV1,
+    UtcTimestamp,
+};
 use outcomes_evidence::verify_evidence_bundle;
+use outcomes_settlement::{CapabilityMatrix, build_intent, preflight};
 use serde_json::{Value, json};
 
 const CAPABILITIES: &str = include_str!("../../../config/adapter-capabilities.json");
@@ -43,6 +48,8 @@ enum OutcomesCommand {
     Demo(DemoArgs),
     /// Safe HIP-4 read-only metadata and checked asset IDs.
     Hip4(Hip4Args),
+    /// Safe artifact-driven settlement preparation and inspection.
+    Settlement(SettlementArgs),
 }
 
 #[derive(Debug, Args)]
@@ -150,6 +157,51 @@ enum Hip4NetworkArg {
     MainnetReadonly,
 }
 
+#[derive(Debug, Args)]
+struct SettlementArgs {
+    #[command(subcommand)]
+    command: SettlementCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum SettlementCommand {
+    /// Re-evaluate settlement readiness against retained current metadata.
+    Preflight(SettlementInputArgs),
+    /// Build a deterministic unsigned intent after successful preflight.
+    BuildIntent {
+        #[command(flatten)]
+        inputs: SettlementInputArgs,
+        /// Canonical whole-second UTC intent expiry.
+        #[arg(long)]
+        expires_at: String,
+    },
+    /// Inspect an intent through a no-effect dry run.
+    Publish {
+        intent: PathBuf,
+        /// Required. This build has no mutation-capable publisher.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Inspect a retained reconciliation result.
+    Reconcile { reconciliation: PathBuf },
+}
+
+#[derive(Debug, Args)]
+struct SettlementInputArgs {
+    /// Explicit digest-bound market binding JSON.
+    #[arg(long)]
+    binding: PathBuf,
+    /// Final HSAI resolution JSON.
+    #[arg(long)]
+    resolution: PathBuf,
+    /// Retained current outcomeMeta JSON.
+    #[arg(long)]
+    metadata: PathBuf,
+    /// Dated backend capability snapshot JSON.
+    #[arg(long)]
+    capabilities: PathBuf,
+}
+
 fn main() -> ExitCode {
     match run(Cli::parse()) {
         Ok(value) => match serde_json::to_string_pretty(&value) {
@@ -171,8 +223,102 @@ fn run(cli: Cli) -> Result<Value, CliError> {
             OutcomesCommand::Evidence(evidence) => run_evidence(evidence),
             OutcomesCommand::Demo(demo) => run_demo(demo),
             OutcomesCommand::Hip4(hip4) => run_hip4(hip4),
+            OutcomesCommand::Settlement(settlement) => run_settlement(settlement),
         },
     }
+}
+
+fn run_settlement(args: SettlementArgs) -> Result<Value, CliError> {
+    match args.command {
+        SettlementCommand::Preflight(inputs) => {
+            let (_, _, readiness) = settlement_preflight(&inputs)?;
+            serde_json::to_value(readiness).map_err(CliError::internal)
+        }
+        SettlementCommand::BuildIntent { inputs, expires_at } => {
+            let (binding, resolution, readiness) = settlement_preflight(&inputs)?;
+            let expires_at: UtcTimestamp =
+                expires_at
+                    .parse()
+                    .map_err(|error: outcomes_domain::TimestampError| {
+                        CliError::validation(&error.to_string())
+                    })?;
+            let intent = build_intent(&binding, &resolution, &readiness, expires_at)
+                .map_err(|error| CliError::validation(&error.to_string()))?;
+            serde_json::to_value(intent).map_err(CliError::internal)
+        }
+        SettlementCommand::Publish { intent, dry_run } => {
+            let intent: UnsignedSettlementIntentV1 = read_json(&intent)?;
+            if intent.network == SettlementNetwork::HyperliquidMainnetReadonly {
+                return Err(CliError::operation(
+                    "MAINNET_MUTATION_DISABLED",
+                    "mainnet mutation is structurally disabled",
+                ));
+            }
+            if !dry_run {
+                return Err(CliError::operation(
+                    "DRY_RUN_REQUIRED",
+                    "this build has no mutation-capable publisher; --dry-run is required",
+                ));
+            }
+            Ok(json!({
+                "intent_id": intent.intent_id,
+                "network": intent.network,
+                "dry_run": true,
+                "external_effect": "none",
+                "publisher_status": if intent.network == SettlementNetwork::Mock {
+                    "MOCK_DRY_RUN_ONLY"
+                } else {
+                    "UNSUPPORTED_UNVERIFIED"
+                },
+            }))
+        }
+        SettlementCommand::Reconcile { reconciliation } => {
+            let result: ReconciliationResultV1 = read_json(&reconciliation)?;
+            Ok(json!({
+                "status": result.status,
+                "settlement_lifecycle": result.settlement_lifecycle,
+                "binding_digest": result.binding_digest,
+                "final_resolution_digest": result.final_resolution_digest,
+                "exact_reason": result.exact_reason,
+                "external_effect": "none; retained reconciliation inspection only",
+            }))
+        }
+    }
+}
+
+fn settlement_preflight(
+    inputs: &SettlementInputArgs,
+) -> Result<
+    (
+        MarketBindingV1,
+        ResolutionRecordV1,
+        outcomes_settlement::SettlementPreflight,
+    ),
+    CliError,
+> {
+    let binding: MarketBindingV1 = read_json(&inputs.binding)?;
+    let resolution: ResolutionRecordV1 = read_json(&inputs.resolution)?;
+    let capabilities: CapabilityMatrix = read_json(&inputs.capabilities)?;
+    if capabilities.network != binding.network || capabilities.backend != binding.backend {
+        return Err(CliError::validation(
+            "capability snapshot does not match binding backend and network",
+        ));
+    }
+    let raw = fs::read(&inputs.metadata)
+        .map_err(|error| CliError::input("FILE_READ_FAILED", &error.to_string()))?;
+    let market = Hip4ReadOnlyBackend {
+        network: binding.network,
+        info_url: String::new(),
+    }
+    .parse_recorded(&raw)
+    .map_err(|error| CliError::validation(&error.to_string()))?;
+    if market.market_id != binding.external_market_id {
+        return Err(CliError::validation(
+            "network-scoped outcome ID does not match binding",
+        ));
+    }
+    let readiness = preflight(&binding, &resolution, market.metadata_digest, &capabilities);
+    Ok((binding, resolution, readiness))
 }
 
 fn run_hip4(args: Hip4Args) -> Result<Value, CliError> {
@@ -340,6 +486,14 @@ impl CliError {
         }
     }
 
+    fn operation(code: &'static str, message: &str) -> Self {
+        Self {
+            exit_code: 6,
+            code,
+            message: message.to_owned(),
+        }
+    }
+
     #[allow(clippy::needless_pass_by_value)]
     fn internal(message: impl ToString) -> Self {
         Self {
@@ -354,4 +508,93 @@ fn fail(code: u8, error_code: &str, message: &str) -> ExitCode {
     let output = json!({"error_code": error_code, "message": message});
     eprintln!("{output}");
     ExitCode::from(code)
+}
+
+#[cfg(test)]
+mod tests {
+    use outcomes_domain::Sha256Digest;
+
+    use super::*;
+
+    fn intent(
+        network: SettlementNetwork,
+    ) -> Result<UnsignedSettlementIntentV1, Box<dyn std::error::Error>> {
+        Ok(UnsignedSettlementIntentV1 {
+            schema_version: "hsai.unsigned-settlement-intent.v1".to_owned(),
+            intent_id: "intent-cli-test".to_owned(),
+            backend: "hyperliquid-hip4".to_owned(),
+            network,
+            binding_digest: Sha256Digest::from_bytes([1; 32]),
+            final_resolution_digest: Sha256Digest::from_bytes([2; 32]),
+            action_type: "ATTESTED_RESOLUTION".to_owned(),
+            canonical_payload: "{}".to_owned(),
+            payload_digest: Sha256Digest::from_bytes([3; 32]),
+            idempotency_key: "settlement-cli-test".to_owned(),
+            expires_at: "2026-07-12T00:00:00Z".parse()?,
+        })
+    }
+
+    fn write_intent(
+        network: SettlementNetwork,
+    ) -> Result<(tempfile::TempDir, PathBuf), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("intent.json");
+        fs::write(&path, serde_json::to_vec(&intent(network)?)?)?;
+        Ok((directory, path))
+    }
+
+    #[test]
+    fn contract_cli_mainnet_publish_refuses_even_dry_run() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let (_directory, path) = write_intent(SettlementNetwork::HyperliquidMainnetReadonly)?;
+        let error = run(Cli {
+            command: RootCommand::Outcomes(OutcomesArgs {
+                command: OutcomesCommand::Settlement(SettlementArgs {
+                    command: SettlementCommand::Publish {
+                        intent: path,
+                        dry_run: true,
+                    },
+                }),
+            }),
+        })
+        .err()
+        .ok_or("mainnet publish must fail")?;
+        assert_eq!(error.code, "MAINNET_MUTATION_DISABLED");
+        assert_eq!(error.exit_code, 6);
+        Ok(())
+    }
+
+    #[test]
+    fn contract_cli_publish_requires_dry_run_and_never_effects()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (_directory, path) = write_intent(SettlementNetwork::Mock)?;
+        let denied = run(Cli {
+            command: RootCommand::Outcomes(OutcomesArgs {
+                command: OutcomesCommand::Settlement(SettlementArgs {
+                    command: SettlementCommand::Publish {
+                        intent: path.clone(),
+                        dry_run: false,
+                    },
+                }),
+            }),
+        })
+        .err()
+        .ok_or("non-dry-run publish must fail")?;
+        assert_eq!(denied.code, "DRY_RUN_REQUIRED");
+
+        let output = run(Cli {
+            command: RootCommand::Outcomes(OutcomesArgs {
+                command: OutcomesCommand::Settlement(SettlementArgs {
+                    command: SettlementCommand::Publish {
+                        intent: path,
+                        dry_run: true,
+                    },
+                }),
+            }),
+        })
+        .map_err(|error| std::io::Error::other(error.message))?;
+        assert_eq!(output["external_effect"], "none");
+        assert_eq!(output["dry_run"], true);
+        Ok(())
+    }
 }

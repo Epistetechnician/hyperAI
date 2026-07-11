@@ -13,8 +13,12 @@ outcomes-application = { path = "../outcomes-application" }
 outcomes-blobstore = { path = "../outcomes-blobstore" }
 outcomes-domain = { path = "../outcomes-domain" }
 outcomes-evidence = { path = "../outcomes-evidence" }
+outcomes-settlement = { path = "../outcomes-settlement" }
 serde.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true

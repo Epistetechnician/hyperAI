@@ -1,6 +1,12 @@
 //! Admission-aware validator execution, normalization, and replay ports.
 
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    process::{Command, Stdio},
+    sync::atomic::{AtomicU64, Ordering},
+    thread,
+    time::{Duration, Instant},
+};
 
 use outcomes_domain::{
     AdmissionDecisionKind, AdmissionDecisionV1, CandidateEnvelopeV1, ClaimSpecV1, DeterminismTier,
@@ -9,6 +15,8 @@ use outcomes_domain::{
 };
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
+
+static OCI_PROBE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Runner failures are infrastructure states, never a false claim result.
 #[derive(Debug, Error)]
@@ -31,6 +39,9 @@ pub enum RunnerError {
     /// Local OCI execution is unavailable and was not falsely simulated.
     #[error("OCI runner unavailable: {0}")]
     OciUnavailable(String),
+    /// Docker CLI process could not be spawned or polled.
+    #[error("OCI process I/O failed: {0}")]
+    OciIo(#[from] std::io::Error),
 }
 
 /// Immutable input to one verification attempt.
@@ -230,6 +241,8 @@ pub fn evaluate_admission(
 // These booleans are explicit independently auditable security controls.
 #[allow(clippy::struct_excessive_bools)]
 pub struct OciSandboxPolicy {
+    /// Local repository name combined with the immutable digest at execution.
+    pub image_repository: String,
     /// Immutable `sha256:` image reference.
     pub image_digest: String,
     /// Container UID; zero is forbidden.
@@ -246,6 +259,27 @@ pub struct OciSandboxPolicy {
     pub argv: Vec<String>,
     /// Explicit environment allowlist.
     pub environment_allowlist: Vec<String>,
+    /// Maximum process count.
+    pub pids_limit: u32,
+    /// Maximum container memory.
+    pub memory_bytes: u64,
+    /// CPU quota in thousandths of one CPU.
+    pub cpu_millis: u32,
+    /// Size of the no-exec scratch tmpfs.
+    pub scratch_bytes: u64,
+    /// Hard wall-clock timeout for the probe process.
+    pub timeout_millis: u64,
+}
+
+/// Result of enforcing the OCI control-plane contract against a local daemon.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OciProbeResult {
+    /// Immutable repository-at-digest reference executed.
+    pub image_reference: String,
+    /// Whether the container command exited successfully.
+    pub success: bool,
+    /// Measured host wall-clock time.
+    pub wall_clock_millis: u64,
 }
 
 /// Validate the fail-closed OCI policy before any process is spawned.
@@ -279,7 +313,178 @@ pub fn validate_oci_policy(policy: &OciSandboxPolicy) -> Result<(), RunnerError>
             "structured non-empty argv is required".to_owned(),
         ));
     }
+    if policy.image_repository.is_empty()
+        || policy.image_repository.starts_with('-')
+        || policy.image_repository.contains('@')
+        || policy.image_repository.chars().any(char::is_whitespace)
+    {
+        return Err(RunnerError::UnsafeOciPolicy(
+            "image repository is empty or contains unsafe syntax".to_owned(),
+        ));
+    }
+    if policy.pids_limit == 0
+        || policy.memory_bytes < 16 * 1024 * 1024
+        || policy.cpu_millis == 0
+        || policy.cpu_millis > 1_000
+        || policy.scratch_bytes == 0
+        || policy.timeout_millis == 0
+    {
+        return Err(RunnerError::UnsafeOciPolicy(
+            "bounded pids, memory, CPU, scratch, and timeout are required".to_owned(),
+        ));
+    }
     Ok(())
+}
+
+/// Build the exact Docker `create` arguments for the validated policy.
+///
+/// The result contains no shell string and mounts no host path or socket.
+///
+/// # Errors
+///
+/// Returns a typed unsafe-policy error before returning arguments.
+pub fn docker_create_args(
+    policy: &OciSandboxPolicy,
+    container_name: &str,
+) -> Result<Vec<String>, RunnerError> {
+    validate_oci_policy(policy)?;
+    if container_name.is_empty()
+        || container_name.starts_with('-')
+        || !container_name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(RunnerError::UnsafeOciPolicy(
+            "container name contains unsafe syntax".to_owned(),
+        ));
+    }
+    let mut arguments = vec![
+        "create".to_owned(),
+        "--name".to_owned(),
+        container_name.to_owned(),
+        "--network".to_owned(),
+        "none".to_owned(),
+        "--read-only".to_owned(),
+        "--cap-drop".to_owned(),
+        "ALL".to_owned(),
+        "--security-opt".to_owned(),
+        "no-new-privileges".to_owned(),
+        "--user".to_owned(),
+        format!("{}:{}", policy.user_id, policy.user_id),
+        "--pids-limit".to_owned(),
+        policy.pids_limit.to_string(),
+        "--memory".to_owned(),
+        policy.memory_bytes.to_string(),
+        "--cpus".to_owned(),
+        format_cpu_quota(policy.cpu_millis),
+        "--tmpfs".to_owned(),
+        format!("/tmp:rw,noexec,nosuid,nodev,size={}", policy.scratch_bytes),
+    ];
+    for name in &policy.environment_allowlist {
+        if name.is_empty()
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
+        {
+            return Err(RunnerError::UnsafeOciPolicy(
+                "environment allowlist contains an unsafe name".to_owned(),
+            ));
+        }
+        arguments.push("--env".to_owned());
+        arguments.push(name.clone());
+    }
+    arguments.push("--entrypoint".to_owned());
+    arguments.push(policy.argv[0].clone());
+    arguments.push(format!(
+        "{}@{}",
+        policy.image_repository, policy.image_digest
+    ));
+    arguments.extend(policy.argv.iter().skip(1).cloned());
+    Ok(arguments)
+}
+
+/// Execute an effect-free control-plane probe against the local Docker daemon.
+///
+/// The command receives no candidate, host mount, socket, credential, or
+/// network. Output is discarded to make output flooding non-blocking. This
+/// verifies daemon enforcement only; it is not a candidate verifier backend.
+///
+/// # Errors
+///
+/// Returns policy, Docker availability, create/start, timeout, or cleanup
+/// failures. Timeout cleanup forcibly removes the isolated probe container.
+pub fn run_docker_oci_probe(policy: &OciSandboxPolicy) -> Result<OciProbeResult, RunnerError> {
+    validate_oci_policy(policy)?;
+    let suffix = &policy.image_digest[7..19];
+    let sequence = OCI_PROBE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let container_name = format!("hsai-oci-probe-{}-{sequence}-{suffix}", std::process::id());
+    let arguments = docker_create_args(policy, &container_name)?;
+    let create = Command::new("docker").args(&arguments).output()?;
+    if !create.status.success() {
+        return Err(RunnerError::OciUnavailable(
+            String::from_utf8_lossy(&create.stderr).trim().to_owned(),
+        ));
+    }
+    let started = Instant::now();
+    let child = Command::new("docker")
+        .args(["start", "--attach", &container_name])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+    let mut child = match child {
+        Ok(child) => child,
+        Err(error) => {
+            remove_probe_container(&container_name, true);
+            return Err(RunnerError::OciIo(error));
+        }
+    };
+    let timeout = Duration::from_millis(policy.timeout_millis);
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if started.elapsed() >= timeout {
+            remove_probe_container(&container_name, true);
+            let _ = child.wait();
+            return Err(RunnerError::OciUnavailable(
+                "probe exceeded hard wall-clock timeout".to_owned(),
+            ));
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+    let cleanup = Command::new("docker")
+        .args(["rm", &container_name])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?;
+    if !cleanup.success() {
+        return Err(RunnerError::OciUnavailable(
+            "probe container cleanup failed".to_owned(),
+        ));
+    }
+    Ok(OciProbeResult {
+        image_reference: format!("{}@{}", policy.image_repository, policy.image_digest),
+        success: status.success(),
+        wall_clock_millis: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+    })
+}
+
+fn remove_probe_container(container_name: &str, force: bool) {
+    let mut command = Command::new("docker");
+    command.arg("rm");
+    if force {
+        command.arg("--force");
+    }
+    let _ = command
+        .arg(container_name)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+fn format_cpu_quota(cpu_millis: u32) -> String {
+    format!("{}.{:03}", cpu_millis / 1_000, cpu_millis % 1_000)
 }
 
 fn build_manifest(
@@ -488,6 +693,7 @@ mod tests {
     #[test]
     fn contract_oci_policy_rejects_root_and_socket_mounts() {
         let unsafe_policy = OciSandboxPolicy {
+            image_repository: "example.invalid/validator".to_owned(),
             image_digest: format!("sha256:{}", "a".repeat(64)),
             user_id: 0,
             read_only_root: true,
@@ -496,7 +702,88 @@ mod tests {
             host_socket_mounted: true,
             argv: vec!["/validator/check".to_owned()],
             environment_allowlist: Vec::new(),
+            pids_limit: 32,
+            memory_bytes: 64 * 1024 * 1024,
+            cpu_millis: 250,
+            scratch_bytes: 4 * 1024 * 1024,
+            timeout_millis: 5_000,
         };
         assert!(validate_oci_policy(&unsafe_policy).is_err());
+    }
+
+    #[test]
+    fn contract_docker_arguments_enforce_controls_without_shell_or_mounts()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let policy = OciSandboxPolicy {
+            image_repository: "alpine".to_owned(),
+            image_digest: format!("sha256:{}", "a".repeat(64)),
+            user_id: 65_534,
+            read_only_root: true,
+            drop_all_capabilities: true,
+            network_disabled: true,
+            host_socket_mounted: false,
+            argv: vec!["/bin/true".to_owned()],
+            environment_allowlist: vec!["LANG".to_owned(), "TZ".to_owned()],
+            pids_limit: 32,
+            memory_bytes: 64 * 1024 * 1024,
+            cpu_millis: 250,
+            scratch_bytes: 4 * 1024 * 1024,
+            timeout_millis: 5_000,
+        };
+        let arguments = docker_create_args(&policy, "hsai-test-probe")?;
+        for required in [
+            "none",
+            "--read-only",
+            "--cap-drop",
+            "ALL",
+            "no-new-privileges",
+            "--pids-limit",
+            "--memory",
+            "--cpus",
+            "--tmpfs",
+        ] {
+            assert!(arguments.iter().any(|argument| argument == required));
+        }
+        for forbidden in [
+            "--volume",
+            "--mount",
+            "/var/run/docker.sock",
+            "/bin/sh",
+            "-c",
+        ] {
+            assert!(!arguments.iter().any(|argument| argument == forbidden));
+        }
+        assert_eq!(
+            arguments.last().map(String::as_str),
+            Some("alpine@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires an explicitly selected preloaded local Docker image"]
+    fn external_docker_daemon_enforces_oci_probe() -> Result<(), Box<dyn std::error::Error>> {
+        let image_repository = std::env::var("HSAI_TEST_OCI_IMAGE_REPOSITORY")?;
+        let image_digest = std::env::var("HSAI_TEST_OCI_IMAGE_DIGEST")?;
+        let policy = OciSandboxPolicy {
+            image_repository,
+            image_digest,
+            user_id: 65_534,
+            read_only_root: true,
+            drop_all_capabilities: true,
+            network_disabled: true,
+            host_socket_mounted: false,
+            argv: vec!["/bin/true".to_owned()],
+            environment_allowlist: Vec::new(),
+            pids_limit: 32,
+            memory_bytes: 64 * 1024 * 1024,
+            cpu_millis: 250,
+            scratch_bytes: 4 * 1024 * 1024,
+            timeout_millis: 5_000,
+        };
+        let result = run_docker_oci_probe(&policy)?;
+        assert!(result.success);
+        assert!(result.wall_clock_millis <= policy.timeout_millis);
+        Ok(())
     }
 }

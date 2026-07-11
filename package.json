@@ -6,10 +6,12 @@
   "scripts": {
     "lint": "pnpm run lint:fast && pnpm run verify:contracts && pnpm run verify:full",
     "lint:fast": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets --all-features -- -D warnings",
-    "test:focused": "cargo test -p outcomes-domain -p outcomes-persistence-sqlx -p outcomes-blobstore -p outcomes-corpus -p outcomes-source -p outcomes-runner -p outcomes-harness -p outcomes-evidence -p outcomes-resolution -p outcomes-application -p hyperliquid-hip4",
+    "test:focused": "cargo test -p outcomes-domain -p outcomes-persistence-sqlx -p outcomes-blobstore -p outcomes-corpus -p outcomes-source -p outcomes-runner -p outcomes-harness -p outcomes-evidence -p outcomes-resolution -p outcomes-application -p hyperliquid-hip4 -p outcomes-api -p outcomes-cli -p outcomes-worker",
     "verify:contracts": "cargo test --workspace contract_",
     "verify:full": "cargo test --workspace --all-features",
     "verify:external-readonly": "cargo test -p hyperliquid-hip4 --features live-readonly -- --ignored",
+    "verify:infra-postgres": "cargo test -p outcomes-persistence-sqlx tests::contract_postgres_migrations_apply_in_isolated_schema -- --ignored --exact",
+    "verify:infra-oci": "cargo test -p outcomes-runner tests::external_docker_daemon_enforces_oci_probe -- --ignored --exact",
     "hsai": "cargo run -p outcomes-cli"
   }
 }

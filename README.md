@@ -11,9 +11,10 @@ Hyperliquid HIP-4 is the first backend integration.
 Current implementation status: hermetic vertical slice. Frozen claims,
 cursor-aware local observation, structured verification, evidence export,
 attestor quorum, finality, explicit HIP-4 binding, deterministic intents, and
-idempotent mock reconciliation are executable and tested. External corpus
-profiles are pinned metadata/conformance records, not downloaded runnable
-challenge packages. No live market has been created or settled. Testnet
+idempotent mock reconciliation are executable and tested. Safe materialization
+from an already-pinned local corpus checkout is tested, but the system does not
+clone upstream repositories or resolve LFS/submodules/archives/images. No live
+market has been created or settled. Testnet
 publishing is `UNSUPPORTED_UNVERIFIED`; mainnet mutation is structurally
 disabled.
 
@@ -27,6 +28,9 @@ pnpm run hsai outcomes demo computational-market --scenario true --artifact-root
 pnpm run hsai outcomes evidence verify artifacts/true/evidence-bundle.json --blob-root artifacts/true
 pnpm run hsai outcomes demo computational-market --scenario false --artifact-root artifacts/false --json
 pnpm run hsai outcomes demo computational-market --scenario runner-error --artifact-root artifacts/error --json
+pnpm run hsai outcomes settlement preflight --binding artifacts/true/market-binding.json --resolution artifacts/true/final-resolution.json --metadata fixtures/hip4/outcome-meta.json --capabilities artifacts/true/hip4-capabilities.json
+pnpm run hsai outcomes settlement publish artifacts/true/settlement-intent.json --dry-run
+pnpm run hsai outcomes settlement reconcile artifacts/true/mock-reconciliation.json
 ```
 
 The TRUE demo performs one idempotent effect against the in-memory mock only.
