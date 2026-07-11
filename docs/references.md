@@ -15,9 +15,13 @@ implementation claims; secondary sources are discovery aids only.
   observed commit `2fdb18f9517675ea03695a0962bd19eece9c83f0`
 - [Official Rust SDK HIP-4 draft PR 190](https://github.com/hyperliquid-dex/hyperliquid-rust-sdk/pull/190)
 
-Read-only observations on 2026-07-10 confirmed that `outcomeMeta` and
-`settledOutcome` returned HTTP 200 on official mainnet and testnet Info
-endpoints. These observations are a dated capability snapshot, not an SLA.
+The official Spot Info page, last updated three days before access, documents
+`outcomeMeta` with request `{"type":"outcomeMeta"}`, an `outcomes` array
+response, and the label "testnet-only." Direct read-only observations on
+2026-07-10 found `outcomeMeta` and `settledOutcome` returning HTTP 200 on both
+official mainnet and testnet Info endpoints. The documentation/rollout mismatch
+is capability uncertainty, not write authority or an SLA. The implementation
+uses the documented list request and treats outcome IDs as network-scoped.
 
 ## Challenge corpora and harnesses
 

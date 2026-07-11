@@ -4,6 +4,7 @@ use outcomes_domain::{
     AgentHarnessDescriptorV1, AgentRunPlanV1, AgentRunResultV1, AgentTraceBundleV1,
     ChallengePackageV1, Sha256Digest, SolverViewManifestV1, UtcTimestamp, domain_separated_digest,
 };
+use serde::Deserialize;
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
@@ -33,6 +34,77 @@ pub enum HarnessError {
     /// Payload could not be canonicalized.
     #[error("harness payload is not canonicalizable: {0}")]
     Canonicalization(#[from] outcomes_domain::CanonicalizationError),
+    /// Bundled harness-profile JSON was invalid.
+    #[error("harness profile JSON is invalid: {0}")]
+    ProfileJson(#[from] serde_json::Error),
+    /// Harness profile did not preserve verifier authority or immutable pinning.
+    #[error("unsafe harness profile {0}")]
+    UnsafeProfile(String),
+}
+
+/// Pinned external harness profile used only through the adapter port.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HarnessProfile {
+    /// Stable harness adapter ID.
+    pub profile_id: String,
+    /// Official public repository.
+    pub repository: String,
+    /// Immutable 40-hex Git commit.
+    pub commit: String,
+    /// Supported adapter entrypoints.
+    pub entrypoints: Vec<String>,
+    /// Default offline execution mode.
+    pub default_mode: String,
+    /// Whether live model execution is enabled by default.
+    pub live_model_enabled: bool,
+    /// Authority that decides candidate validity.
+    pub truth_authority: String,
+}
+
+/// Dated harness-profile catalog.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HarnessProfileCatalog {
+    /// Catalog schema version.
+    pub schema_version: String,
+    /// Verification timestamp.
+    pub verified_at: UtcTimestamp,
+    /// Pinned harness profiles.
+    pub profiles: Vec<HarnessProfile>,
+}
+
+/// Load the pinned NYU harness profile without executing a model or container.
+///
+/// # Errors
+///
+/// Returns JSON, schema, immutable-commit, entrypoint, live-mode, or verifier
+/// authority errors.
+pub fn bundled_harness_profiles() -> Result<HarnessProfileCatalog, HarnessError> {
+    let catalog: HarnessProfileCatalog =
+        serde_json::from_str(include_str!("../../../config/harness-profiles.json"))?;
+    if catalog.schema_version != "hsai.harness-profile-catalog.v1" {
+        return Err(HarnessError::UnsafeProfile("catalog-schema".to_owned()));
+    }
+    for profile in &catalog.profiles {
+        let commit_valid = profile.commit.len() == 40
+            && profile
+                .commit
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'));
+        let required_entrypoints = ["d-cipher", "single-executor", "nyu-baseline"];
+        if !commit_valid
+            || profile.live_model_enabled
+            || profile.default_mode != "RECORDED_TRACE"
+            || profile.truth_authority != "PINNED_HSAI_CHALLENGE_VERIFIER"
+            || !required_entrypoints
+                .iter()
+                .all(|entrypoint| profile.entrypoints.iter().any(|value| value == entrypoint))
+        {
+            return Err(HarnessError::UnsafeProfile(profile.profile_id.clone()));
+        }
+    }
+    Ok(catalog)
 }
 
 /// Separate port for agent/evaluation harnesses.
@@ -259,6 +331,18 @@ mod tests {
             completed_at: timestamp("2026-07-10T12:01:00Z")?,
         };
         assert!(harness.extract_candidates(&result)?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn contract_nyu_harness_profile_is_pinned_offline_and_non_authoritative()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let catalog = bundled_harness_profiles()?;
+        assert_eq!(catalog.profiles.len(), 1);
+        let profile = &catalog.profiles[0];
+        assert_eq!(profile.commit.len(), 40);
+        assert!(!profile.live_model_enabled);
+        assert_eq!(profile.truth_authority, "PINNED_HSAI_CHALLENGE_VERIFIER");
         Ok(())
     }
 }

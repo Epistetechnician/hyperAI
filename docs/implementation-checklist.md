@@ -21,14 +21,18 @@ architecture therefore follows the prompt's Rust greenfield branch.
 - [x] Phase 4: portable evidence, runtime Ed25519 signatures, distinct quorum,
   existential resolution, disputes, pauses/finality guards, and composed local
   TRUE/FALSE/ERROR scenarios.
-- [ ] Phase 5: API, CLI, workers, auth, OpenAPI, and observability.
-- [ ] Phase 6: recorded adapters, overlays, rights/provenance records, and NYU
-  recorded harness path.
-- [ ] Phase 7: HIP-4 read-only metadata, network-scoped identity, binding, and
+- [x] Phase 5 local surface: machine-readable CLI, public/operator API auth,
+  OpenAPI route contract, payload limit, and durable-job state semantics. The
+  broader suggested endpoint catalog and production identity provider remain
+  future work.
+- [x] Phase 6 profile/conformance layer: immutable pins, generic-Git overlays,
+  rights/readiness records, recorded/manual source boundaries, and pinned NYU
+  harness metadata. External challenge-byte materialization remains future work.
+- [x] Phase 7: HIP-4 read-only metadata, network-scoped identity, binding, and
   stale-metadata detection.
-- [ ] Phase 8: mock settlement, deterministic intents, manual handoff,
+- [x] Phase 8: mock settlement, deterministic intents, manual handoff,
   reconciliation, crash recovery, and mainnet refusal.
-- [ ] Phase 9: threat model, runbooks, clean demo, complete gates, and handoff.
+- [x] Phase 9: threat model, runbooks, clean demo, complete gates, and handoff.
 
 ## Explicit external boundary
 

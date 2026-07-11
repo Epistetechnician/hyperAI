@@ -5,9 +5,10 @@ use std::collections::BTreeMap;
 use outcomes_domain::{
     AdapterHealthStatus, AdapterHealthV1, ChallengeDescriptorV1, ChallengePackageV1,
     CorpusDescriptorV1, CorpusSnapshotV1, PackageArtifactV1, PackageVisibility,
-    RightsAndProvenanceAssessmentV1, RightsStatus, Sha256Digest, SolverViewManifestV1,
-    UtcTimestamp, domain_separated_digest,
+    RightsAndProvenanceAssessmentV1, RightsStatus, SettlementReadiness, Sha256Digest,
+    SolverViewManifestV1, UtcTimestamp, domain_separated_digest,
 };
+use serde::Deserialize;
 use thiserror::Error;
 
 /// Failures returned by corpus adapters and solver-view validation.
@@ -31,6 +32,101 @@ pub enum CorpusError {
     /// Domain payload could not be canonicalized.
     #[error("corpus payload is not canonicalizable: {0}")]
     Canonicalization(#[from] outcomes_domain::CanonicalizationError),
+    /// Bundled profile JSON was invalid.
+    #[error("corpus profile catalog JSON is invalid: {0}")]
+    ProfileJson(#[from] serde_json::Error),
+    /// Bundled profile violates immutable pin or uniqueness requirements.
+    #[error("invalid corpus profile {profile_id}: {reason}")]
+    InvalidProfile {
+        /// Invalid profile identifier.
+        profile_id: String,
+        /// Exact invariant failure.
+        reason: String,
+    },
+}
+
+/// Machine-readable catalog of reviewed generic-Git manifest profiles.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CorpusProfileCatalog {
+    /// Catalog schema version.
+    pub schema_version: String,
+    /// Dated verification snapshot.
+    pub verified_at: UtcTimestamp,
+    /// Seven required pinned corpus paths.
+    pub profiles: Vec<CorpusProfile>,
+}
+
+/// One data-only profile over the shared generic-Git corpus engine.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CorpusProfile {
+    /// Stable profile identifier.
+    pub profile_id: String,
+    /// Shared adapter engine identifier.
+    pub engine: String,
+    /// Allowlisted public upstream repository.
+    pub repository: String,
+    /// Immutable 40-hex Git commit.
+    pub commit: String,
+    /// Reviewed inventory roots.
+    pub roots: Vec<String>,
+    /// Solver-view exclusion patterns.
+    pub excluded_patterns: Vec<String>,
+    /// Human-readable exact license boundary.
+    pub license_status: String,
+    /// Typed rights ceiling.
+    pub rights_status: RightsStatus,
+    /// Typed settlement readiness ceiling.
+    pub readiness: SettlementReadiness,
+}
+
+/// Load and validate the seven required pinned corpus profiles.
+///
+/// # Errors
+///
+/// Returns JSON, schema, duplicate, mutable-ref, engine, or empty-boundary
+/// errors. Loading performs no network access.
+pub fn bundled_corpus_profiles() -> Result<CorpusProfileCatalog, CorpusError> {
+    let catalog: CorpusProfileCatalog =
+        serde_json::from_str(include_str!("../../../config/corpus-profiles.json"))?;
+    if catalog.schema_version != "hsai.corpus-profile-catalog.v1" {
+        return Err(CorpusError::InvalidProfile {
+            profile_id: "catalog".to_owned(),
+            reason: "unsupported schema version".to_owned(),
+        });
+    }
+    let mut ids = std::collections::BTreeSet::new();
+    let mut repositories = std::collections::BTreeSet::new();
+    for profile in &catalog.profiles {
+        let invalid_commit = profile.commit.len() != 40
+            || profile
+                .commit
+                .bytes()
+                .any(|byte| !matches!(byte, b'0'..=b'9' | b'a'..=b'f'));
+        let reason = if !ids.insert(profile.profile_id.clone()) {
+            Some("duplicate profile ID")
+        } else if !repositories.insert(profile.repository.clone()) {
+            Some("duplicate repository profile")
+        } else if profile.engine != "generic-git-corpus.v1" {
+            Some("profile does not use the shared generic-Git engine")
+        } else if invalid_commit {
+            Some("commit is not immutable lowercase 40-hex")
+        } else if profile.roots.is_empty() || profile.excluded_patterns.is_empty() {
+            Some("inventory roots and solver-view exclusions are required")
+        } else if profile.readiness == SettlementReadiness::SettlementReady {
+            Some("archive profile cannot be settlement-ready without live observation")
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            return Err(CorpusError::InvalidProfile {
+                profile_id: profile.profile_id.clone(),
+                reason: reason.to_owned(),
+            });
+        }
+    }
+    Ok(catalog)
 }
 
 /// Versioned port for immutable challenge corpus materialization.
@@ -371,6 +467,28 @@ mod tests {
             verify_solver_view(&adapter.package, &view),
             Err(CorpusError::SecretExposure(_))
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn contract_seven_required_corpus_profiles_are_pinned_and_data_driven()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let catalog = bundled_corpus_profiles()?;
+        assert_eq!(catalog.profiles.len(), 7);
+        let author_profiles = catalog
+            .profiles
+            .iter()
+            .filter(|profile| profile.profile_id.starts_with("public-author-"))
+            .collect::<Vec<_>>();
+        assert_eq!(author_profiles.len(), 3);
+        assert!(
+            author_profiles
+                .iter()
+                .all(|profile| profile.engine == "generic-git-corpus.v1")
+        );
+        assert!(catalog.profiles.iter().all(|profile| {
+            profile.readiness != SettlementReadiness::SettlementReady && profile.commit.len() == 40
+        }));
         Ok(())
     }
 }

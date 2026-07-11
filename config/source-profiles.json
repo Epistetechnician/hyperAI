@@ -1,0 +1,33 @@
+{
+  "schema_version": "hsai.source-profile-catalog.v1",
+  "verified_at": "2026-07-10T00:00:00Z",
+  "profiles": [
+    {
+      "profile_id": "zk-golf-submission-source",
+      "mode": "RECORDED_FIXTURE",
+      "live_read_enabled": false,
+      "authenticated_automation_enabled": false,
+      "completeness_attestation": false,
+      "readiness": "EVALUATION_ONLY",
+      "blocking_reason": "official stable live source-time, completeness, license, and authorization model unverified"
+    },
+    {
+      "profile_id": "ecdsa-fail-submission-source",
+      "mode": "RECORDED_FIXTURE",
+      "live_read_enabled": false,
+      "authenticated_automation_enabled": false,
+      "completeness_attestation": false,
+      "readiness": "EVALUATION_ONLY",
+      "blocking_reason": "official stable live source-time, completeness, license, and authorization model unverified"
+    },
+    {
+      "profile_id": "247ctf-manual-source",
+      "mode": "MANUAL_REVIEWED_FIXTURE",
+      "live_read_enabled": false,
+      "authenticated_automation_enabled": false,
+      "completeness_attestation": false,
+      "readiness": "MANUAL_ONLY",
+      "blocking_reason": "no official automation API and no explicit authenticated-platform authorization"
+    }
+  ]
+}

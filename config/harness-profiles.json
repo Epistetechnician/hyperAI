@@ -1,0 +1,15 @@
+{
+  "schema_version": "hsai.harness-profile-catalog.v1",
+  "verified_at": "2026-07-10T00:00:00Z",
+  "profiles": [
+    {
+      "profile_id": "nyu-ctf-agents-harness",
+      "repository": "https://github.com/NYU-LLM-CTF/nyuctf_agents",
+      "commit": "6bb4d2b437c09457adb7dba6f15074f57af83a1f",
+      "entrypoints": ["d-cipher", "single-executor", "nyu-baseline"],
+      "default_mode": "RECORDED_TRACE",
+      "live_model_enabled": false,
+      "truth_authority": "PINNED_HSAI_CHALLENGE_VERIFIER"
+    }
+  ]
+}

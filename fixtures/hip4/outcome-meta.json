@@ -1,0 +1,1 @@
+{"outcomes":[{"outcome":42,"name":"Mock recurring outcome","description":"Display text is not authoritative","questionId":"question-42","sideSpecs":[{"name":"Up","displayColor":"green"},{"name":"Down","displayColor":"red"}],"quoteToken":"USDC","settled":false,"settlementAuthority":"mock-authority"}]}

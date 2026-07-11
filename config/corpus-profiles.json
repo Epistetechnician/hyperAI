@@ -1,0 +1,83 @@
+{
+  "schema_version": "hsai.corpus-profile-catalog.v1",
+  "verified_at": "2026-07-10T00:00:00Z",
+  "profiles": [
+    {
+      "profile_id": "nyu-ctf-bench",
+      "engine": "generic-git-corpus.v1",
+      "repository": "https://github.com/NYU-LLM-CTF/NYU_CTF_Bench",
+      "commit": "4c5744f55a31a58e03d6118c9dbb1c18e5bbdfa9",
+      "roots": ["development", "test"],
+      "excluded_patterns": ["**/flag*", "**/solution*", "**/writeup*"],
+      "license_status": "GPL-2.0 repository license; per-challenge provenance required",
+      "rights_status": "RESTRICTED",
+      "readiness": "EVALUATION_ONLY"
+    },
+    {
+      "profile_id": "cryptohack-ctf-archive",
+      "engine": "generic-git-corpus.v1",
+      "repository": "https://github.com/cryptohack/ctf_archive",
+      "commit": "4697b69f51fa33acf9c6d9fd4276ca3fb117af0c",
+      "roots": ["."],
+      "excluded_patterns": ["**/server_files/**", "**/flag*", "**/solution*"],
+      "license_status": "MIT repository terms; upstream attribution retained",
+      "rights_status": "RESTRICTED",
+      "readiness": "EVALUATION_ONLY"
+    },
+    {
+      "profile_id": "ctf-archives",
+      "engine": "generic-git-corpus.v1",
+      "repository": "https://github.com/sajjadium/ctf-archives",
+      "commit": "097bfa7780078bf65aa266a63b3c85a1df6073e6",
+      "roots": ["."],
+      "excluded_patterns": ["**/writeup*", "**/solution*", "**/flag*"],
+      "license_status": "MIT top-level license is not item-level redistribution proof",
+      "rights_status": "AMBIGUOUS",
+      "readiness": "CATALOG_ONLY"
+    },
+    {
+      "profile_id": "pwn-college-ctf-archive",
+      "engine": "generic-git-corpus.v1",
+      "repository": "https://github.com/pwncollege/ctf-archive",
+      "commit": "d1c3b204ae0b55ecbbc09b0cab4842c79f50819a",
+      "roots": ["."],
+      "excluded_patterns": ["**/writeup*", "**/solution*", "**/flag*"],
+      "license_status": "item-level original-challenge rights review required",
+      "rights_status": "AMBIGUOUS",
+      "readiness": "CATALOG_ONLY"
+    },
+    {
+      "profile_id": "public-author-josephsurin",
+      "engine": "generic-git-corpus.v1",
+      "repository": "https://github.com/josephsurin/my-ctf-challenges",
+      "commit": "3a9c75f808f70e80759263a4048dde532dc1186b",
+      "roots": ["."],
+      "excluded_patterns": ["**/solve*", "**/solution*", "**/writeup*", "**/flag*"],
+      "license_status": "operator permission or item-level license required",
+      "rights_status": "AMBIGUOUS",
+      "readiness": "CATALOG_ONLY"
+    },
+    {
+      "profile_id": "public-author-maple3142",
+      "engine": "generic-git-corpus.v1",
+      "repository": "https://github.com/maple3142/My-CTF-Challenges",
+      "commit": "7b3e786a2c20812f4da23536c7817bdfe8113dd6",
+      "roots": ["."],
+      "excluded_patterns": ["**/solve*", "**/solution*", "**/writeup*", "**/flag*"],
+      "license_status": "operator permission or item-level license required",
+      "rights_status": "AMBIGUOUS",
+      "readiness": "CATALOG_ONLY"
+    },
+    {
+      "profile_id": "public-author-alex-bellon",
+      "engine": "generic-git-corpus.v1",
+      "repository": "https://github.com/alex-bellon/ctf-challenges",
+      "commit": "ba0112047d6e122870a3b457645a59e37b9fae35",
+      "roots": ["."],
+      "excluded_patterns": ["**/solve*", "**/solution*", "**/writeup*", "**/flag*"],
+      "license_status": "operator permission or item-level license required",
+      "rights_status": "AMBIGUOUS",
+      "readiness": "CATALOG_ONLY"
+    }
+  ]
+}

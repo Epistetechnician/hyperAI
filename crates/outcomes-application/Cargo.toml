@@ -6,12 +6,14 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+hyperliquid-hip4 = { path = "../hyperliquid-hip4" }
 outcomes-blobstore = { path = "../outcomes-blobstore" }
 outcomes-corpus = { path = "../outcomes-corpus" }
 outcomes-domain = { path = "../outcomes-domain", features = ["fixtures"] }
 outcomes-evidence = { path = "../outcomes-evidence" }
 outcomes-resolution = { path = "../outcomes-resolution" }
 outcomes-runner = { path = "../outcomes-runner" }
+outcomes-settlement = { path = "../outcomes-settlement" }
 outcomes-source = { path = "../outcomes-source" }
 serde.workspace = true
 serde_json.workspace = true

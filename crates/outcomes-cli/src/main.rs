@@ -3,9 +3,10 @@
 use std::{collections::HashMap, fs, path::PathBuf, process::ExitCode};
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use hyperliquid_hip4::{Hip4ReadOnlyBackend, decode_asset_id, encode_asset_ids};
 use outcomes_application::{LocalScenario, run_local_scenario};
 use outcomes_blobstore::FileBlobStore;
-use outcomes_domain::{ClaimSpecDraftV1, ClaimSpecV1, OutcomeEvidenceBundleV1};
+use outcomes_domain::{ClaimSpecDraftV1, ClaimSpecV1, OutcomeEvidenceBundleV1, SettlementNetwork};
 use outcomes_evidence::verify_evidence_bundle;
 use serde_json::{Value, json};
 
@@ -40,6 +41,8 @@ enum OutcomesCommand {
     Evidence(EvidenceArgs),
     /// Hermetic local demonstrations.
     Demo(DemoArgs),
+    /// Safe HIP-4 read-only metadata and checked asset IDs.
+    Hip4(Hip4Args),
 }
 
 #[derive(Debug, Args)]
@@ -117,6 +120,36 @@ enum ScenarioArg {
     RunnerError,
 }
 
+#[derive(Debug, Args)]
+struct Hip4Args {
+    #[command(subcommand)]
+    command: Hip4Command,
+}
+
+#[derive(Debug, Subcommand)]
+enum Hip4Command {
+    /// Parse a retained outcomeMeta fixture without network access.
+    Discover {
+        /// Network scope for the outcome ID.
+        #[arg(long, value_enum)]
+        network: Hip4NetworkArg,
+        /// Sanitized retained outcomeMeta JSON.
+        #[arg(long)]
+        fixture: PathBuf,
+    },
+    /// Compute all checked HIP-4 identifiers.
+    Encode { outcome_id: u64, side_index: u8 },
+    /// Decode a `#coin` or `+token` identifier.
+    Decode { asset_id: String },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum Hip4NetworkArg {
+    Mock,
+    Testnet,
+    MainnetReadonly,
+}
+
 fn main() -> ExitCode {
     match run(Cli::parse()) {
         Ok(value) => match serde_json::to_string_pretty(&value) {
@@ -137,7 +170,42 @@ fn run(cli: Cli) -> Result<Value, CliError> {
             OutcomesCommand::Claim(claim) => run_claim(claim),
             OutcomesCommand::Evidence(evidence) => run_evidence(evidence),
             OutcomesCommand::Demo(demo) => run_demo(demo),
+            OutcomesCommand::Hip4(hip4) => run_hip4(hip4),
         },
+    }
+}
+
+fn run_hip4(args: Hip4Args) -> Result<Value, CliError> {
+    match args.command {
+        Hip4Command::Discover { network, fixture } => {
+            let network = match network {
+                Hip4NetworkArg::Mock => SettlementNetwork::Mock,
+                Hip4NetworkArg::Testnet => SettlementNetwork::HyperliquidTestnet,
+                Hip4NetworkArg::MainnetReadonly => SettlementNetwork::HyperliquidMainnetReadonly,
+            };
+            let raw = fs::read(fixture)
+                .map_err(|error| CliError::input("FILE_READ_FAILED", &error.to_string()))?;
+            let backend = Hip4ReadOnlyBackend {
+                network,
+                info_url: String::new(),
+            };
+            let market = backend
+                .parse_recorded(&raw)
+                .map_err(|error| CliError::validation(&error.to_string()))?;
+            serde_json::to_value(market).map_err(CliError::internal)
+        }
+        Hip4Command::Encode {
+            outcome_id,
+            side_index,
+        } => serde_json::to_value(
+            encode_asset_ids(outcome_id, side_index)
+                .map_err(|error| CliError::validation(&error.to_string()))?,
+        )
+        .map_err(CliError::internal),
+        Hip4Command::Decode { asset_id } => serde_json::to_value(
+            decode_asset_id(&asset_id).map_err(|error| CliError::validation(&error.to_string()))?,
+        )
+        .map_err(CliError::internal),
     }
 }
 

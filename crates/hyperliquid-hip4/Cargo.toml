@@ -6,8 +6,20 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
-outcomes-domain = { path = "../outcomes-domain" }
+outcomes-domain = { path = "../outcomes-domain", features = ["fixtures"] }
 outcomes-settlement = { path = "../outcomes-settlement" }
+reqwest = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[features]
+default = []
+live-readonly = ["dep:reqwest"]
+
+[dev-dependencies]
+proptest.workspace = true
 
 [lints]
 workspace = true

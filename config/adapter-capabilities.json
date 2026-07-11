@@ -13,8 +13,8 @@
     {"id":"cryptohack-ctf-archive-corpus","readiness":"EVALUATION_ONLY","mode":"RECORDED_SUBSET","blocking_reason":"hosted page is discovery only"},
     {"id":"public-author-repo-corpus","readiness":"CATALOG_ONLY","mode":"MANIFEST_OVERLAY","blocking_reason":"ambiguous rights block redistribution and settlement"},
     {"id":"247ctf-manual-source","readiness":"MANUAL_ONLY","mode":"REVIEWED_FIXTURE","blocking_reason":"no authorized automation or completeness model"},
-    {"id":"hyperliquid-hip4-readonly","readiness":"EVALUATION_ONLY","mode":"READ_ONLY","blocking_reason":"no resolution publication capability"},
+    {"id":"hyperliquid-hip4-readonly","readiness":"EVALUATION_ONLY","mode":"OPT_IN_LIVE_READ_ONLY_AND_RECORDED_FIXTURE","blocking_reason":"read-only metadata is not a resolution publication capability"},
     {"id":"hyperliquid-hip4-mock","readiness":"SETTLEMENT_READY","mode":"HERMETIC_MOCK","blocking_reason":null},
-    {"id":"hyperliquid-hip4-publisher","readiness":"UNSUPPORTED","mode":"DISABLED","blocking_reason":"public resolution action, signer role, and authorization model undocumented"}
+    {"id":"hyperliquid-hip4-publisher","readiness":"UNSUPPORTED_UNVERIFIED","mode":"DISABLED","blocking_reason":"official create/resolution action, signing domain, signer role, replay protection, and authorization model are undocumented"}
   ]
 }

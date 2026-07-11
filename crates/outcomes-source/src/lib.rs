@@ -4,8 +4,10 @@ use std::collections::BTreeMap;
 
 use outcomes_domain::{
     AdapterHealthStatus, AdapterHealthV1, CandidateEnvelopeV1, ClaimId, CompletenessStatus,
-    ObservationSnapshotV1, Sha256Digest, UtcTimestamp, domain_separated_digest,
+    ObservationSnapshotV1, SettlementReadiness, Sha256Digest, UtcTimestamp,
+    domain_separated_digest,
 };
+use serde::Deserialize;
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
@@ -50,6 +52,80 @@ pub enum SourceError {
     /// Payload could not be canonicalized.
     #[error("source payload is not canonicalizable: {0}")]
     Canonicalization(#[from] outcomes_domain::CanonicalizationError),
+    /// Bundled source-profile JSON was invalid.
+    #[error("source profile JSON is invalid: {0}")]
+    ProfileJson(#[from] serde_json::Error),
+    /// Source profile claimed an unsafe capability.
+    #[error("unsafe source profile {0}")]
+    UnsafeProfile(String),
+}
+
+/// Recorded/manual integration mode for challenge submission sources.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum SourceProfileMode {
+    /// Sanitized offline fixture with provenance and retrieval date.
+    RecordedFixture,
+    /// Operator-reviewed metadata without authenticated automation.
+    ManualReviewedFixture,
+}
+
+/// One fail-closed source integration profile.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceProfile {
+    /// Stable adapter ID.
+    pub profile_id: String,
+    /// Recorded or manual mode.
+    pub mode: SourceProfileMode,
+    /// Whether official live public reads are enabled.
+    pub live_read_enabled: bool,
+    /// Whether authenticated platform automation is authorized.
+    pub authenticated_automation_enabled: bool,
+    /// Whether this adapter can attest complete observation.
+    pub completeness_attestation: bool,
+    /// Exact readiness ceiling.
+    pub readiness: SettlementReadiness,
+    /// Exact external blocker.
+    pub blocking_reason: String,
+}
+
+/// Dated source-profile catalog.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceProfileCatalog {
+    /// Catalog schema version.
+    pub schema_version: String,
+    /// Verification date.
+    pub verified_at: UtcTimestamp,
+    /// zk.golf, ecdsa.fail, and 247CTF profiles.
+    pub profiles: Vec<SourceProfile>,
+}
+
+/// Load the bundled source profiles without network or authenticated interaction.
+///
+/// # Errors
+///
+/// Returns JSON, schema, duplicate ID, or unsafe capability errors.
+pub fn bundled_source_profiles() -> Result<SourceProfileCatalog, SourceError> {
+    let catalog: SourceProfileCatalog =
+        serde_json::from_str(include_str!("../../../config/source-profiles.json"))?;
+    if catalog.schema_version != "hsai.source-profile-catalog.v1" {
+        return Err(SourceError::UnsafeProfile("catalog-schema".to_owned()));
+    }
+    let mut ids = std::collections::BTreeSet::new();
+    for profile in &catalog.profiles {
+        if !ids.insert(profile.profile_id.clone())
+            || profile.live_read_enabled
+            || profile.authenticated_automation_enabled
+            || profile.completeness_attestation
+            || profile.readiness == SettlementReadiness::SettlementReady
+            || profile.blocking_reason.trim().is_empty()
+        {
+            return Err(SourceError::UnsafeProfile(profile.profile_id.clone()));
+        }
+    }
+    Ok(catalog)
 }
 
 /// Versioned port for completeness-aware candidate observation.
@@ -448,6 +524,26 @@ mod tests {
             &timestamp("2026-07-10T12:05:01Z")?,
         )?;
         assert_eq!(snapshot.completeness, CompletenessStatus::Incomplete);
+        Ok(())
+    }
+
+    #[test]
+    fn contract_recorded_and_manual_sources_cannot_claim_live_completeness()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let catalog = bundled_source_profiles()?;
+        assert_eq!(catalog.profiles.len(), 3);
+        let manual = catalog
+            .profiles
+            .iter()
+            .find(|profile| profile.profile_id == "247ctf-manual-source")
+            .ok_or("247CTF manual profile missing")?;
+        assert_eq!(manual.mode, SourceProfileMode::ManualReviewedFixture);
+        assert_eq!(manual.readiness, SettlementReadiness::ManualOnly);
+        assert!(catalog.profiles.iter().all(|profile| {
+            !profile.live_read_enabled
+                && !profile.authenticated_automation_enabled
+                && !profile.completeness_attestation
+        }));
         Ok(())
     }
 }

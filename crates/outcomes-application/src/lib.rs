@@ -1,13 +1,15 @@
 //! Cross-slice outcome use cases and the hermetic computational-market scenario.
 
-use std::{collections::HashMap, path::Path};
+use std::{collections::HashMap, fs, path::Path};
+
+use hyperliquid_hip4::{Hip4Error, Hip4MockBackend, capability_matrix, parse_outcome_meta};
 
 use outcomes_blobstore::{BlobStoreError, FileBlobStore};
 use outcomes_corpus::{ChallengeCorpusAdapter, CorpusError, LocalFixtureCorpus};
 use outcomes_domain::{
     ClaimSpecError, ClaimTruth, EvidenceClassification, ExecutionManifestV1, ExecutionOutcome,
-    ResolutionAttestationV1, ResolutionFinality, Sha256Digest, UtcTimestamp,
-    domain_separated_digest, fixtures::local_demo_claim_draft,
+    ReconciliationStatus, ResolutionAttestationV1, ResolutionFinality, SettlementNetwork,
+    Sha256Digest, UtcTimestamp, domain_separated_digest, fixtures::local_demo_claim_draft,
 };
 use outcomes_evidence::{
     AttestorRegistry, DevelopmentSigner, EvidenceBundleInput, EvidenceError, RegisteredAttestor,
@@ -19,6 +21,9 @@ use outcomes_resolution::{
 };
 use outcomes_runner::{
     RunnerError, RunnerRequest, ScriptedRunner, VerificationRunner, evaluate_admission,
+};
+use outcomes_settlement::{
+    SettlementError, bind_market, build_intent, build_manual_handoff, preflight,
 };
 use outcomes_source::{LocalSubmissionLedger, SourceError, SubmissionSourceAdapter};
 use serde::{Deserialize, Serialize};
@@ -53,6 +58,12 @@ pub struct ScenarioReport {
     pub evidence_verified: bool,
     /// Exact external-effect statement.
     pub external_effect: String,
+    /// Number of distinct mock external effects.
+    pub mock_effect_count: usize,
+    /// External reconciliation state, when settlement was exercised.
+    pub reconciliation_status: Option<ReconciliationStatus>,
+    /// Relative exported bundle path under the selected artifact root.
+    pub evidence_bundle_file: String,
 }
 
 /// Application composition failures.
@@ -82,6 +93,15 @@ pub enum ApplicationError {
     /// Content-addressed storage failed.
     #[error(transparent)]
     Blob(#[from] BlobStoreError),
+    /// HIP-4 adapter failed.
+    #[error(transparent)]
+    Hip4(#[from] Hip4Error),
+    /// Settlement preflight or intent construction failed.
+    #[error(transparent)]
+    Settlement(#[from] SettlementError),
+    /// Artifact export failed.
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
     /// JSON encoding failed.
     #[error(transparent)]
     Json(#[from] serde_json::Error),
@@ -225,6 +245,11 @@ pub fn run_local_scenario(
         blobs: blob_refs,
     })?;
     verify_evidence_bundle(&bundle, &blob_bytes)?;
+    fs::create_dir_all(artifact_root)?;
+    fs::write(
+        artifact_root.join("evidence-bundle.json"),
+        serde_json::to_vec_pretty(&bundle)?,
+    )?;
 
     if evaluation.truth == ClaimTruth::Unresolved {
         return Ok(ScenarioReport {
@@ -235,6 +260,9 @@ pub fn run_local_scenario(
             evidence_bundle_digest: bundle.bundle_digest,
             evidence_verified: true,
             external_effect: "none; unresolved claims are not settlement-ready".to_owned(),
+            mock_effect_count: 0,
+            reconciliation_status: None,
+            evidence_bundle_file: "evidence-bundle.json".to_owned(),
         });
     }
 
@@ -295,6 +323,79 @@ pub fn run_local_scenario(
         &final_attestations,
         &registry,
     )?;
+    if scenario == LocalScenario::True {
+        let market = parse_outcome_meta(
+            SettlementNetwork::Mock,
+            include_bytes!("../../../fixtures/hip4/outcome-meta.json"),
+        )?;
+        let capabilities = capability_matrix(SettlementNetwork::Mock, proposed_at.clone());
+        let binding = bind_market(
+            &claim,
+            &market,
+            0,
+            1,
+            domain_separated_digest("hsai.backend-capability.v1", &capabilities)?,
+            "local-demo-operator",
+            proposed_at.clone(),
+            "development-binding-signature".to_owned(),
+        )?;
+        let readiness = preflight(
+            &binding,
+            &final_record,
+            market.metadata_digest,
+            &capabilities,
+        );
+        let intent = build_intent(
+            &binding,
+            &final_record,
+            &readiness,
+            dispute_end.checked_add_seconds(3_600)?,
+        )?;
+        let handoff = build_manual_handoff(
+            &binding,
+            &final_record,
+            &intent,
+            "cas://local/evidence-bundle.json".to_owned(),
+            bundle.bundle_digest,
+            "documented-external-settlement-authority".to_owned(),
+            "development-handoff-signature".to_owned(),
+        )?;
+        let mut backend = Hip4MockBackend::default();
+        let receipt = backend.submit(&intent, dispute_end.clone())?;
+        let idempotent_retry = backend.submit(&intent, dispute_end.clone())?;
+        if receipt != idempotent_retry || backend.effect_count() != 1 {
+            return Err(ApplicationError::Settlement(
+                SettlementError::DigestMismatch,
+            ));
+        }
+        let reconciliation =
+            backend.reconcile(&binding, &final_record, dispute_end.checked_add_seconds(1)?)?;
+        for (name, value) in [
+            ("market-binding.json", serde_json::to_value(&binding)?),
+            ("settlement-intent.json", serde_json::to_value(&intent)?),
+            ("settlement-handoff.json", serde_json::to_value(&handoff)?),
+            ("mock-receipt.json", serde_json::to_value(&receipt)?),
+            (
+                "mock-reconciliation.json",
+                serde_json::to_value(&reconciliation)?,
+            ),
+        ] {
+            fs::write(artifact_root.join(name), serde_json::to_vec_pretty(&value)?)?;
+        }
+        return Ok(ScenarioReport {
+            claim_id: claim.claim_id.to_string(),
+            execution_outcomes: execution_outcomes(&executions),
+            truth: final_record.truth,
+            finality: final_record.finality,
+            evidence_bundle_digest: bundle.bundle_digest,
+            evidence_verified: true,
+            external_effect: "one idempotent mock HIP-4 effect; reconciled CONFIRMED; no testnet or mainnet write".to_owned(),
+            mock_effect_count: backend.effect_count(),
+            reconciliation_status: Some(reconciliation.status),
+            evidence_bundle_file: "evidence-bundle.json".to_owned(),
+        });
+    }
+
     Ok(ScenarioReport {
         claim_id: claim.claim_id.to_string(),
         execution_outcomes: execution_outcomes(&executions),
@@ -306,6 +407,9 @@ pub fn run_local_scenario(
             "none; local {:?} resolution and evidence only",
             final_record.truth
         ),
+        mock_effect_count: 0,
+        reconciliation_status: None,
+        evidence_bundle_file: "evidence-bundle.json".to_owned(),
     })
 }
 
@@ -430,7 +534,16 @@ mod tests {
             assert_eq!(report.truth, truth);
             assert_eq!(report.finality, finality);
             assert!(report.evidence_verified);
-            assert!(report.external_effect.starts_with("none;"));
+            if scenario == LocalScenario::True {
+                assert_eq!(report.mock_effect_count, 1);
+                assert_eq!(
+                    report.reconciliation_status,
+                    Some(ReconciliationStatus::Confirmed)
+                );
+            } else {
+                assert!(report.external_effect.starts_with("none;"));
+                assert_eq!(report.mock_effect_count, 0);
+            }
         }
         Ok(())
     }

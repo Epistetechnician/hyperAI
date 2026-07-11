@@ -34,6 +34,7 @@ data-encoding = "=2.11.0"
 ed25519-dalek = { version = "=3.0.0", default-features = false, features = ["fast", "zeroize"] }
 getrandom = "=0.4.3"
 proptest = "=1.11.0"
+reqwest = { version = "=0.13.4", default-features = false, features = ["blocking", "json", "rustls"] }
 schemars = { version = "=1.2.1", features = ["derive"] }
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.150"
