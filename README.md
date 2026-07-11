@@ -33,6 +33,7 @@ Requires the pinned Rust toolchain and pnpm.
 pnpm install --ignore-scripts --frozen-lockfile
 pnpm run hsai outcomes demo computational-market --scenario true --artifact-root artifacts/true --json
 pnpm run hsai outcomes evidence verify artifacts/true/evidence-bundle.json --blob-root artifacts/true
+pnpm run hsai outcomes demo computational-market --scenario invalid-then-valid --artifact-root artifacts/invalid-then-valid --json
 pnpm run hsai outcomes demo computational-market --scenario false --artifact-root artifacts/false --json
 pnpm run hsai outcomes demo computational-market --scenario runner-error --artifact-root artifacts/error --json
 pnpm run hsai outcomes settlement preflight --binding artifacts/true/market-binding.json --resolution artifacts/true/final-resolution.json --metadata fixtures/hip4/outcome-meta.json --capabilities artifacts/true/hip4-capabilities.json
@@ -41,9 +42,12 @@ pnpm run hsai outcomes settlement reconcile artifacts/true/mock-reconciliation.j
 pnpm run hsai outcomes corpus profiles
 ```
 
-The TRUE demo performs one idempotent effect against the in-memory mock only.
-The FALSE demo finalizes only after complete deadline/grace observation and does
-not automatically publish. The runner-error demo remains `UNRESOLVED/NONE`.
+The TRUE and invalid-then-valid demos each perform one idempotent effect against
+the in-memory mock only. Invalid-then-valid proves `[FAIL, PASS, PASS]`: the
+first candidate remains unresolved and non-qualifying, while the later candidate
+reaches FINAL TRUE. The FALSE demo finalizes only after complete deadline/grace
+observation and does not automatically publish. The runner-error demo remains
+`UNRESOLVED/NONE`.
 
 ## Repository gates
 
@@ -61,5 +65,6 @@ dependencies. For Docker, preload the image and export
 `HSAI_TEST_OCI_PLATFORM` (`linux/arm64` or `linux/amd64`), then run `pnpm run
 verify:infra-oci`. The gate never pulls an image.
 
-See [architecture](docs/outcomes/architecture.md), [HIP-4 status](docs/outcomes/hyperliquid-hip4.md),
-[limitations](docs/outcomes/limitations.md), and the [threat model](docs/threat-model.md).
+See [architecture](docs/outcomes/architecture.md), [acceptance status](docs/outcomes/acceptance.md),
+[HIP-4 status](docs/outcomes/hyperliquid-hip4.md), [limitations](docs/outcomes/limitations.md),
+and the [threat model](docs/threat-model.md).

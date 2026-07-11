@@ -195,6 +195,7 @@ async fn run_demo(
     require_operator(&headers, &state.config.operator_role)?;
     let scenario = match scenario.as_str() {
         "true" => LocalScenario::True,
+        "invalid-then-valid" => LocalScenario::InvalidThenValid,
         "false" => LocalScenario::False,
         "runner-error" => LocalScenario::RunnerError,
         _ => return Err(ApiError::UnknownScenario),
@@ -756,6 +757,35 @@ mod tests {
         let bytes = to_bytes(allowed.into_body(), 1_048_576).await?;
         let report: ScenarioReport = serde_json::from_slice(&bytes)?;
         assert_eq!(report.truth, outcomes_domain::ClaimTruth::Unresolved);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn contract_invalid_then_valid_demo_reports_all_execution_outcomes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let response = test_router(directory.path().to_path_buf())?
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/demo/invalid-then-valid")
+                    .header("x-hsai-role", "operator")
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), 1_048_576).await?;
+        let report: ScenarioReport = serde_json::from_slice(&bytes)?;
+        assert_eq!(
+            report.execution_outcomes,
+            vec![
+                outcomes_domain::ExecutionOutcome::Fail,
+                outcomes_domain::ExecutionOutcome::Pass,
+                outcomes_domain::ExecutionOutcome::Pass,
+            ]
+        );
+        assert_eq!(report.truth, outcomes_domain::ClaimTruth::True);
+        assert_eq!(report.mock_effect_count, 1);
         Ok(())
     }
 

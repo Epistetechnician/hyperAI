@@ -22,7 +22,9 @@ architecture therefore follows the prompt's Rust greenfield branch.
   reconciliation. Production hostile-code sandbox qualification remains future.
 - [x] Phase 4: portable evidence, runtime Ed25519 signatures, distinct quorum,
   existential resolution, disputes, pauses/finality guards, and composed local
-  TRUE/FALSE/ERROR scenarios.
+  TRUE/FALSE/ERROR scenarios. The invalid-then-valid existential path is also
+  composed through evidence, finality, one idempotent mock effect, and reconciliation;
+  remaining scenario-level gaps are tracked in `docs/outcomes/acceptance.md`.
 - [x] Phase 5 local surface: machine-readable CLI, public/operator API auth,
   OpenAPI route contract, payload limit, granular mock settlement preflight and
   workflow, artifact-driven settlement CLI, fixed-cardinality operational

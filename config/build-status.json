@@ -4,6 +4,7 @@
   "items": [
     {"slice":"claim-domain-and-canonicalization","status":"TESTED","evidence":"cargo test -p outcomes-domain"},
     {"slice":"local-observation-runner-evidence-resolution","status":"TESTED","evidence":"cargo test -p outcomes-application"},
+    {"slice":"acceptance-invalid-then-valid-existential-path","status":"TESTED","evidence":"one frozen claim composes distinct FAIL then PASS candidates through a real ledger snapshot, three execution manifests, portable evidence, quorum, FINAL TRUE, exactly one mock effect, and confirmed reconciliation; the failed candidate remains blob evidence but is not qualifying evidence"},
     {"slice":"sqlite-eventing-and-filesystem-cas","status":"TESTED","evidence":"pnpm run verify:contracts"},
     {"slice":"postgres-migration-execution","status":"TESTED","evidence":"0001 and 0002 applied to ephemeral pinned PostgreSQL 16; isolated-schema ignored contract test passed; 36 public tables and append-only triggers verified"},
     {"slice":"external-corpus-profiles","status":"TESTED","evidence":"profile schema, pins, sanitized normalized recorded manifests, solver-view boundaries, conformance tests, and truthful readiness records"},

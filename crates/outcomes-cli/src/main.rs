@@ -130,6 +130,7 @@ enum DemoCommand {
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum ScenarioArg {
     True,
+    InvalidThenValid,
     False,
     RunnerError,
 }
@@ -514,6 +515,7 @@ fn run_demo(args: DemoArgs) -> Result<Value, CliError> {
         } => {
             let scenario = match scenario {
                 ScenarioArg::True => LocalScenario::True,
+                ScenarioArg::InvalidThenValid => LocalScenario::InvalidThenValid,
                 ScenarioArg::False => LocalScenario::False,
                 ScenarioArg::RunnerError => LocalScenario::RunnerError,
             };
@@ -721,6 +723,31 @@ mod tests {
                 .as_array()
                 .is_some_and(|blockers| !blockers.is_empty())
         );
+        Ok(())
+    }
+
+    #[test]
+    fn contract_cli_invalid_then_valid_reports_all_execution_outcomes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let output = run(Cli {
+            command: RootCommand::Outcomes(OutcomesArgs {
+                command: OutcomesCommand::Demo(DemoArgs {
+                    command: DemoCommand::ComputationalMarket {
+                        scenario: ScenarioArg::InvalidThenValid,
+                        artifact_root: directory.path().to_path_buf(),
+                        json: true,
+                    },
+                }),
+            }),
+        })
+        .map_err(|error| std::io::Error::other(error.message))?;
+        assert_eq!(
+            output["execution_outcomes"],
+            json!(["FAIL", "PASS", "PASS"])
+        );
+        assert_eq!(output["truth"], "TRUE");
+        assert_eq!(output["mock_effect_count"], 1);
         Ok(())
     }
 }

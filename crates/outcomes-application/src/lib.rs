@@ -35,6 +35,8 @@ use thiserror::Error;
 pub enum LocalScenario {
     /// Eligible candidate passes two agreeing replays and finalizes true.
     True,
+    /// A deterministic rejection remains unresolved before a later valid candidate finalizes true.
+    InvalidThenValid,
     /// Complete empty observation finalizes false after deadline and grace.
     False,
     /// Runner error leaves truth unresolved and settlement-ineligible.
@@ -108,6 +110,9 @@ pub enum ApplicationError {
     /// Domain payload hashing failed.
     #[error(transparent)]
     Canonicalization(#[from] outcomes_domain::CanonicalizationError),
+    /// A composed acceptance invariant was violated.
+    #[error("scenario invariant violated: {0}")]
+    ScenarioInvariant(&'static str),
 }
 
 /// Run the local claim-to-final-resolution scenario without network access.
@@ -162,54 +167,94 @@ fn run_scenario_with_runner(
     let mut executions = Vec::new();
 
     if scenario != LocalScenario::False {
-        let bytes = if scenario == LocalScenario::True {
-            b"hsai-pass-v1".as_slice()
-        } else {
-            b"hsai-error-v1".as_slice()
-        };
-        let candidate = ledger.ingest(
-            claim.claim_id.clone(),
-            "local.demo",
-            "submission-1",
-            "1",
-            None,
-            timestamp("2026-07-10T10:30:00Z")?,
-            timestamp("2026-07-10T10:30:01Z")?,
-            "application/octet-stream",
-            bytes.to_vec(),
-        )?;
-        let admission = evaluate_admission(claim, &candidate)?;
-        let replay_count = if scenario == LocalScenario::True {
-            2
-        } else {
-            1
+        let candidate_inputs: Vec<(&str, &[u8], usize)> = match scenario {
+            LocalScenario::True => vec![("submission-1", b"hsai-pass-v1", 2)],
+            LocalScenario::InvalidThenValid => vec![
+                ("submission-1", b"hsai-invalid-v1", 1),
+                ("submission-2", b"hsai-pass-v1", 2),
+            ],
+            LocalScenario::RunnerError => vec![("submission-1", b"hsai-error-v1", 1)],
+            LocalScenario::False => unreachable!("false has no candidates"),
         };
         let mut scripted_runner = ScriptedRunner::exact_bytes_fixture();
-        for index in 0..replay_count {
-            let started = timestamp("2026-07-10T10:31:00Z")?;
-            let ended = timestamp("2026-07-10T10:31:01Z")?;
-            let request = RunnerRequest {
-                claim,
-                candidate: &candidate,
-                candidate_bytes: bytes,
-                admission: &admission,
-                run_id: &format!("run-{index}"),
-                started_at: &started,
-                ended_at: &ended,
-                logical_time: &started,
-            };
-            executions.push(if let Some(runner) = supplied_runner.as_deref_mut() {
-                runner.execute(&request)?
-            } else {
-                scripted_runner.execute(&request)?
-            });
+        for (candidate_index, (source_id, bytes, replay_count)) in
+            candidate_inputs.into_iter().enumerate()
+        {
+            let candidate = ledger.ingest(
+                claim.claim_id.clone(),
+                "local.demo",
+                source_id,
+                "1",
+                None,
+                timestamp(if candidate_index == 0 {
+                    "2026-07-10T10:30:00Z"
+                } else {
+                    "2026-07-10T10:35:00Z"
+                })?,
+                timestamp(if candidate_index == 0 {
+                    "2026-07-10T10:30:01Z"
+                } else {
+                    "2026-07-10T10:35:01Z"
+                })?,
+                "application/octet-stream",
+                bytes.to_vec(),
+            )?;
+            let admission = evaluate_admission(claim, &candidate)?;
+            for index in 0..replay_count {
+                let started = timestamp(if candidate_index == 0 {
+                    "2026-07-10T10:31:00Z"
+                } else {
+                    "2026-07-10T10:36:00Z"
+                })?;
+                let ended = timestamp(if candidate_index == 0 {
+                    "2026-07-10T10:31:01Z"
+                } else {
+                    "2026-07-10T10:36:01Z"
+                })?;
+                let request = RunnerRequest {
+                    claim,
+                    candidate: &candidate,
+                    candidate_bytes: bytes,
+                    admission: &admission,
+                    run_id: &format!("run-{candidate_index}-{index}"),
+                    started_at: &started,
+                    ended_at: &ended,
+                    logical_time: &started,
+                };
+                executions.push(if let Some(runner) = supplied_runner.as_deref_mut() {
+                    runner.execute(&request)?
+                } else {
+                    scripted_runner.execute(&request)?
+                });
+            }
+            candidates.push(candidate);
+            admissions.push(admission);
+
+            if scenario == LocalScenario::InvalidThenValid && candidate_index == 0 {
+                let intermediate_cutoff = timestamp("2026-07-10T10:34:00Z")?;
+                let intermediate_observation = ledger.snapshot(
+                    None,
+                    &intermediate_cutoff,
+                    &timestamp("2026-07-10T10:34:01Z")?,
+                )?;
+                let intermediate = evaluate_existential_claim(
+                    claim,
+                    &intermediate_cutoff,
+                    intermediate_observation.completeness,
+                    &executions,
+                    0,
+                )?;
+                if intermediate.truth != ClaimTruth::Unresolved {
+                    return Err(ApplicationError::ScenarioInvariant(
+                        "an invalid first candidate must remain unresolved",
+                    ));
+                }
+            }
         }
-        candidates.push(candidate);
-        admissions.push(admission);
     }
 
     let (cutoff, observed_at) = match scenario {
-        LocalScenario::True | LocalScenario::RunnerError => (
+        LocalScenario::True | LocalScenario::InvalidThenValid | LocalScenario::RunnerError => (
             timestamp("2026-07-10T10:40:00Z")?,
             timestamp("2026-07-10T10:40:01Z")?,
         ),
@@ -247,24 +292,34 @@ fn run_scenario_with_runner(
             format!("{:?}", evaluation.blockers),
         ),
     )?;
+    let execution_manifest_digests = executions
+        .iter()
+        .map(|execution| domain_separated_digest("hsai.execution-manifest.v1", execution))
+        .collect::<Result<Vec<_>, _>>()?;
+    let qualifying_candidate_digests = candidates
+        .iter()
+        .filter(|candidate| {
+            executions.iter().zip(&execution_manifest_digests).any(
+                |(execution, execution_digest)| {
+                    execution.candidate_digest == candidate.artifact_digest
+                        && evaluation.qualifying_run_digests.contains(execution_digest)
+                },
+            )
+        })
+        .map(|candidate| candidate.artifact_digest)
+        .collect();
     let bundle = build_evidence_bundle(EvidenceBundleInput {
         claim_id: claim.claim_id.clone(),
         claim_spec_digest: claim.claim_spec_digest()?,
         challenge_descriptor_digest: claim.challenge_descriptor_digest,
         observation_snapshot_digests: vec![observation_digest],
         completeness_assessment_digest: completeness_digest,
-        qualifying_candidate_digests: candidates
-            .iter()
-            .map(|candidate| candidate.artifact_digest)
-            .collect(),
+        qualifying_candidate_digests,
         admission_decision_digests: admissions
             .iter()
             .map(|admission| admission.decision_digest)
             .collect(),
-        execution_manifest_digests: executions
-            .iter()
-            .map(|execution| domain_separated_digest("hsai.execution-manifest.v1", execution))
-            .collect::<Result<Vec<_>, _>>()?,
+        execution_manifest_digests,
         resolution_aggregation_digest: aggregation_digest,
         dispute_record_digests: Vec::new(),
         code_build_provenance_digest: domain_separated_digest(
@@ -356,7 +411,10 @@ fn run_scenario_with_runner(
         &final_attestations,
         &registry,
     )?;
-    if scenario == LocalScenario::True {
+    if matches!(
+        scenario,
+        LocalScenario::True | LocalScenario::InvalidThenValid
+    ) {
         let market = parse_outcome_meta(
             SettlementNetwork::Mock,
             include_bytes!("../../../fixtures/hip4/outcome-meta.json"),
@@ -594,6 +652,46 @@ mod tests {
                 assert_eq!(report.mock_effect_count, 0);
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn acceptance_invalid_candidate_then_valid_candidate_finalizes_true_once()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let report = run_local_scenario(LocalScenario::InvalidThenValid, directory.path())?;
+
+        assert_eq!(
+            report.execution_outcomes,
+            vec![
+                ExecutionOutcome::Fail,
+                ExecutionOutcome::Pass,
+                ExecutionOutcome::Pass,
+            ]
+        );
+        assert_eq!(report.truth, ClaimTruth::True);
+        assert_eq!(report.finality, ResolutionFinality::Final);
+        assert!(report.evidence_verified);
+        assert_eq!(report.mock_effect_count, 1);
+        assert_eq!(
+            report.reconciliation_status,
+            Some(ReconciliationStatus::Confirmed)
+        );
+
+        let bundle: serde_json::Value =
+            serde_json::from_slice(&fs::read(directory.path().join("evidence-bundle.json"))?)?;
+        assert_eq!(
+            bundle["qualifying_candidate_digests"]
+                .as_array()
+                .map(Vec::len),
+            Some(1),
+            "the failed candidate must remain evidence, not become qualifying evidence"
+        );
+        assert_eq!(
+            bundle["blobs"].as_array().map(Vec::len),
+            Some(8),
+            "observation, both candidates/admissions, and all three executions must be retained"
+        );
         Ok(())
     }
 
