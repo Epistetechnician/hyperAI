@@ -1,0 +1,30 @@
+[package]
+name = "outcomes-api"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+axum.workspace = true
+outcomes-application = { path = "../outcomes-application" }
+outcomes-corpus = { path = "../outcomes-corpus" }
+outcomes-domain = { path = "../outcomes-domain" }
+outcomes-evidence = { path = "../outcomes-evidence" }
+outcomes-harness = { path = "../outcomes-harness" }
+outcomes-registry = { path = "../outcomes-registry" }
+outcomes-resolution = { path = "../outcomes-resolution" }
+outcomes-runner = { path = "../outcomes-runner" }
+outcomes-settlement = { path = "../outcomes-settlement" }
+outcomes-source = { path = "../outcomes-source" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio.workspace = true
+tower.workspace = true
+
+[lints]
+workspace = true

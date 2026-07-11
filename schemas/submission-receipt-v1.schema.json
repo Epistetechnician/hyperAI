@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SubmissionReceiptV1",
+  "type": "object",
+  "properties": {
+    "accepted_at": {
+      "$ref": "#/$defs/UtcTimestamp"
+    },
+    "backend_receipt_id": {
+      "type": "string"
+    },
+    "external_sequence": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "idempotency_key": {
+      "type": "string"
+    },
+    "intent_id": {
+      "type": "string"
+    },
+    "request_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "response_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "schema_version": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "intent_id",
+    "idempotency_key",
+    "backend_receipt_id",
+    "accepted_at",
+    "request_digest",
+    "response_digest"
+  ],
+  "$defs": {
+    "Sha256Digest": {
+      "description": "A SHA-256 digest serialized as 64 lowercase hexadecimal characters.",
+      "type": "string"
+    },
+    "UtcTimestamp": {
+      "description": "A canonical UTC RFC 3339 timestamp with whole-second precision.",
+      "type": "string"
+    }
+  }
+}

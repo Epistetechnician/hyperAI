@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RightsAndProvenanceAssessmentV1",
+  "type": "object",
+  "properties": {
+    "assessed_at": {
+      "$ref": "#/$defs/UtcTimestamp"
+    },
+    "commercial_market_use_allowed": {
+      "type": "boolean"
+    },
+    "exact_limitation": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "execution_allowed": {
+      "type": "boolean"
+    },
+    "item_license": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "package_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "redistribution_allowed": {
+      "type": "boolean"
+    },
+    "repository_license": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "rights_status": {
+      "$ref": "#/$defs/RightsStatus"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "upstream_attribution": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "package_digest",
+    "upstream_attribution",
+    "rights_status",
+    "redistribution_allowed",
+    "execution_allowed",
+    "commercial_market_use_allowed",
+    "assessed_at"
+  ],
+  "$defs": {
+    "RightsStatus": {
+      "type": "string",
+      "enum": [
+        "PERMITTED",
+        "RESTRICTED",
+        "AMBIGUOUS",
+        "UNKNOWN"
+      ]
+    },
+    "Sha256Digest": {
+      "description": "A SHA-256 digest serialized as 64 lowercase hexadecimal characters.",
+      "type": "string"
+    },
+    "UtcTimestamp": {
+      "description": "A canonical UTC RFC 3339 timestamp with whole-second precision.",
+      "type": "string"
+    }
+  }
+}

@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ResolutionRecordV1",
+  "type": "object",
+  "properties": {
+    "attestation_digests": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Sha256Digest"
+      }
+    },
+    "claim_id": {
+      "$ref": "#/$defs/ClaimId"
+    },
+    "dispute_window_end": {
+      "$ref": "#/$defs/UtcTimestamp"
+    },
+    "dispute_window_start": {
+      "$ref": "#/$defs/UtcTimestamp"
+    },
+    "evidence_bundle_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "finality": {
+      "$ref": "#/$defs/ResolutionFinality"
+    },
+    "record_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "resolution_id": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "truth": {
+      "$ref": "#/$defs/ClaimTruth"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "resolution_id",
+    "claim_id",
+    "truth",
+    "finality",
+    "evidence_bundle_digest",
+    "attestation_digests",
+    "dispute_window_start",
+    "dispute_window_end",
+    "record_digest"
+  ],
+  "$defs": {
+    "ClaimId": {
+      "description": "A claim ID derived from a claim-spec digest.",
+      "type": "string"
+    },
+    "ClaimTruth": {
+      "description": "Truth value of the frozen existential claim.",
+      "oneOf": [
+        {
+          "description": "At least one eligible candidate satisfied the pinned verifier policy.",
+          "type": "string",
+          "const": "TRUE"
+        },
+        {
+          "description": "The complete negative-resolution prerequisites were satisfied.",
+          "type": "string",
+          "const": "FALSE"
+        },
+        {
+          "description": "Available evidence cannot safely decide the claim.",
+          "type": "string",
+          "const": "UNRESOLVED"
+        }
+      ]
+    },
+    "ResolutionFinality": {
+      "description": "Finality state of a resolution record.",
+      "oneOf": [
+        {
+          "description": "No resolution proposal exists.",
+          "type": "string",
+          "const": "NONE"
+        },
+        {
+          "description": "A provisional resolution exists inside its dispute policy.",
+          "type": "string",
+          "const": "PROVISIONAL"
+        },
+        {
+          "description": "A blocking dispute is active.",
+          "type": "string",
+          "const": "DISPUTED"
+        },
+        {
+          "description": "The immutable final-resolution event has been emitted.",
+          "type": "string",
+          "const": "FINAL"
+        }
+      ]
+    },
+    "Sha256Digest": {
+      "description": "A SHA-256 digest serialized as 64 lowercase hexadecimal characters.",
+      "type": "string"
+    },
+    "UtcTimestamp": {
+      "description": "A canonical UTC RFC 3339 timestamp with whole-second precision.",
+      "type": "string"
+    }
+  }
+}

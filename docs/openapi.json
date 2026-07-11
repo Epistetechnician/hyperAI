@@ -1,0 +1,28 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "HSAI Verifiable Outcome Protocol",
+    "version": "0.1.0",
+    "description": "Implemented local and read-only API surface. External writes are disabled."
+  },
+  "paths": {
+    "/health/live": {"get": {"operationId": "live", "responses": {"200": {"description": "Process is live"}}}},
+    "/health/ready": {"get": {"operationId": "ready", "responses": {"200": {"description": "Local dependencies are ready"}}}},
+    "/v1/adapters/capabilities": {"get": {"operationId": "adapterCapabilities", "responses": {"200": {"description": "Dated adapter capability matrix"}}}},
+    "/v1/claims/validate": {
+      "post": {
+        "operationId": "validateFrozenClaim",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "../schemas/claim-spec-v1.schema.json"}}}},
+        "responses": {"200": {"description": "Claim identity is valid"}, "422": {"description": "Claim schema or identity is invalid"}}
+      }
+    },
+    "/v1/demo/{scenario}": {
+      "post": {
+        "operationId": "runLocalDemo",
+        "description": "Operator-gated hermetic local scenario with no external write.",
+        "parameters": [{"name": "scenario", "in": "path", "required": true, "schema": {"type": "string", "enum": ["true", "false", "runner-error"]}}],
+        "responses": {"200": {"description": "Local scenario report"}, "403": {"description": "Operator role required"}, "404": {"description": "Unknown scenario"}}
+      }
+    }
+  }
+}

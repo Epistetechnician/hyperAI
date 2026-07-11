@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CandidateEnvelopeV1",
+  "type": "object",
+  "properties": {
+    "artifact_byte_length": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "artifact_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "artifact_media_type": {
+      "type": "string"
+    },
+    "author_or_team_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "candidate_id": {
+      "type": "string"
+    },
+    "claim_id": {
+      "$ref": "#/$defs/ClaimId"
+    },
+    "observed_source_time": {
+      "$ref": "#/$defs/UtcTimestamp"
+    },
+    "received_at": {
+      "$ref": "#/$defs/UtcTimestamp"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "source_candidate_ref": {
+      "type": "string"
+    },
+    "source_namespace": {
+      "type": "string"
+    },
+    "source_provenance_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "source_revision": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "candidate_id",
+    "claim_id",
+    "source_namespace",
+    "source_candidate_ref",
+    "source_revision",
+    "observed_source_time",
+    "received_at",
+    "artifact_digest",
+    "artifact_byte_length",
+    "artifact_media_type",
+    "source_provenance_digest"
+  ],
+  "$defs": {
+    "ClaimId": {
+      "description": "A claim ID derived from a claim-spec digest.",
+      "type": "string"
+    },
+    "Sha256Digest": {
+      "description": "A SHA-256 digest serialized as 64 lowercase hexadecimal characters.",
+      "type": "string"
+    },
+    "UtcTimestamp": {
+      "description": "A canonical UTC RFC 3339 timestamp with whole-second precision.",
+      "type": "string"
+    }
+  }
+}

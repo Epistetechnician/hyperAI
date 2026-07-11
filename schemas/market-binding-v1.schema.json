@@ -1,0 +1,170 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MarketBindingV1",
+  "type": "object",
+  "properties": {
+    "backend": {
+      "type": "string"
+    },
+    "binding_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "binding_signature": {
+      "type": "string"
+    },
+    "capability_snapshot_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "capability_version": {
+      "type": "string"
+    },
+    "claim_id": {
+      "$ref": "#/$defs/ClaimId"
+    },
+    "claim_spec_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "created_at": {
+      "$ref": "#/$defs/UtcTimestamp"
+    },
+    "created_by": {
+      "type": "string"
+    },
+    "expected_settlement_authority": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "external_claim_commitment": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "external_market_id": {
+      "type": "string"
+    },
+    "external_metadata_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "external_question_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "false_settlement_fraction": {
+      "type": "string"
+    },
+    "false_side_index": {
+      "type": "integer",
+      "format": "uint8",
+      "maximum": 255,
+      "minimum": 0
+    },
+    "invalidation_reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "network": {
+      "$ref": "#/$defs/SettlementNetwork"
+    },
+    "quote_token": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "raw_payload_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "sides": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ExternalSideV1"
+      }
+    },
+    "true_settlement_fraction": {
+      "type": "string"
+    },
+    "true_side_index": {
+      "type": "integer",
+      "format": "uint8",
+      "maximum": 255,
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "backend",
+    "network",
+    "external_market_id",
+    "sides",
+    "true_side_index",
+    "false_side_index",
+    "true_settlement_fraction",
+    "false_settlement_fraction",
+    "external_metadata_digest",
+    "raw_payload_digest",
+    "claim_id",
+    "claim_spec_digest",
+    "capability_snapshot_digest",
+    "capability_version",
+    "created_by",
+    "created_at",
+    "binding_signature",
+    "binding_digest"
+  ],
+  "$defs": {
+    "ClaimId": {
+      "description": "A claim ID derived from a claim-spec digest.",
+      "type": "string"
+    },
+    "ExternalSideV1": {
+      "type": "object",
+      "properties": {
+        "display_name": {
+          "type": "string"
+        },
+        "side_id": {
+          "type": "string"
+        },
+        "side_index": {
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "side_index",
+        "side_id",
+        "display_name"
+      ]
+    },
+    "SettlementNetwork": {
+      "type": "string",
+      "enum": [
+        "MOCK",
+        "HYPERLIQUID_TESTNET",
+        "HYPERLIQUID_MAINNET_READONLY"
+      ]
+    },
+    "Sha256Digest": {
+      "description": "A SHA-256 digest serialized as 64 lowercase hexadecimal characters.",
+      "type": "string"
+    },
+    "UtcTimestamp": {
+      "description": "A canonical UTC RFC 3339 timestamp with whole-second precision.",
+      "type": "string"
+    }
+  }
+}

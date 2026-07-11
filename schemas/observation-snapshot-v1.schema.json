@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ObservationSnapshotV1",
+  "type": "object",
+  "properties": {
+    "claim_id": {
+      "$ref": "#/$defs/ClaimId"
+    },
+    "completeness": {
+      "$ref": "#/$defs/CompletenessStatus"
+    },
+    "completeness_reason": {
+      "type": "string"
+    },
+    "cursor_end": {
+      "type": "string"
+    },
+    "cursor_start": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "cutoff": {
+      "$ref": "#/$defs/UtcTimestamp"
+    },
+    "latest_source_time": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/UtcTimestamp"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "pagination_complete": {
+      "type": "boolean"
+    },
+    "raw_response_digests": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Sha256Digest"
+      }
+    },
+    "received_at": {
+      "$ref": "#/$defs/UtcTimestamp"
+    },
+    "request_parameters_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "retry_count": {
+      "type": "integer",
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "snapshot_id": {
+      "type": "string"
+    },
+    "source_adapter_id": {
+      "type": "string"
+    },
+    "source_adapter_version": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "snapshot_id",
+    "claim_id",
+    "source_adapter_id",
+    "source_adapter_version",
+    "cursor_end",
+    "cutoff",
+    "request_parameters_digest",
+    "raw_response_digests",
+    "received_at",
+    "pagination_complete",
+    "retry_count",
+    "completeness",
+    "completeness_reason"
+  ],
+  "$defs": {
+    "ClaimId": {
+      "description": "A claim ID derived from a claim-spec digest.",
+      "type": "string"
+    },
+    "CompletenessStatus": {
+      "type": "string",
+      "enum": [
+        "COMPLETE",
+        "INCOMPLETE",
+        "UNKNOWN"
+      ]
+    },
+    "Sha256Digest": {
+      "description": "A SHA-256 digest serialized as 64 lowercase hexadecimal characters.",
+      "type": "string"
+    },
+    "UtcTimestamp": {
+      "description": "A canonical UTC RFC 3339 timestamp with whole-second precision.",
+      "type": "string"
+    }
+  }
+}

@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SettlementHandoffV1",
+  "type": "object",
+  "properties": {
+    "backend": {
+      "type": "string"
+    },
+    "binding_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "evidence_bundle_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "evidence_bundle_uri": {
+      "type": "string"
+    },
+    "expected_settlement_mapping": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "expires_at": {
+      "$ref": "#/$defs/UtcTimestamp"
+    },
+    "hsai_handoff_signature": {
+      "type": "string"
+    },
+    "network": {
+      "$ref": "#/$defs/SettlementNetwork"
+    },
+    "operator_preflight_checklist": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "replay_protection": {
+      "type": "string"
+    },
+    "required_authority_role": {
+      "type": "string"
+    },
+    "resolution_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "unsigned_intent_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "backend",
+    "network",
+    "binding_digest",
+    "resolution_digest",
+    "expected_settlement_mapping",
+    "unsigned_intent_digest",
+    "evidence_bundle_uri",
+    "evidence_bundle_digest",
+    "required_authority_role",
+    "operator_preflight_checklist",
+    "expires_at",
+    "replay_protection",
+    "hsai_handoff_signature"
+  ],
+  "$defs": {
+    "SettlementNetwork": {
+      "type": "string",
+      "enum": [
+        "MOCK",
+        "HYPERLIQUID_TESTNET",
+        "HYPERLIQUID_MAINNET_READONLY"
+      ]
+    },
+    "Sha256Digest": {
+      "description": "A SHA-256 digest serialized as 64 lowercase hexadecimal characters.",
+      "type": "string"
+    },
+    "UtcTimestamp": {
+      "description": "A canonical UTC RFC 3339 timestamp with whole-second precision.",
+      "type": "string"
+    }
+  }
+}

@@ -1,0 +1,13 @@
+[package]
+name = "hyperliquid-hip4"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+outcomes-domain = { path = "../outcomes-domain" }
+outcomes-settlement = { path = "../outcomes-settlement" }
+
+[lints]
+workspace = true

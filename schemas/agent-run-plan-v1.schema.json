@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AgentRunPlanV1",
+  "type": "object",
+  "properties": {
+    "challenge_package_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "configuration_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "harness_id": {
+      "type": "string"
+    },
+    "live_authorized": {
+      "type": "boolean"
+    },
+    "model_provider_identity": {
+      "type": "string"
+    },
+    "plan_id": {
+      "type": "string"
+    },
+    "prompt_digests": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Sha256Digest"
+      }
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "solver_view_manifest_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "token_budget": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "tool_allowlist": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "wall_clock_budget_millis": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "plan_id",
+    "harness_id",
+    "challenge_package_digest",
+    "solver_view_manifest_digest",
+    "configuration_digest",
+    "prompt_digests",
+    "model_provider_identity",
+    "tool_allowlist",
+    "token_budget",
+    "wall_clock_budget_millis",
+    "live_authorized"
+  ],
+  "$defs": {
+    "Sha256Digest": {
+      "description": "A SHA-256 digest serialized as 64 lowercase hexadecimal characters.",
+      "type": "string"
+    }
+  }
+}

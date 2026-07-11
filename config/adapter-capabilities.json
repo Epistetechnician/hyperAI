@@ -1,0 +1,20 @@
+{
+  "schema_version": "hsai.adapter-capability-matrix.v1",
+  "verified_at": "2026-07-10T00:00:00Z",
+  "adapters": [
+    {"id":"local-fixture","readiness":"SETTLEMENT_READY","mode":"HERMETIC_FIXTURE","blocking_reason":null},
+    {"id":"generic-git-corpus","readiness":"EVALUATION_ONLY","mode":"PINNED_SNAPSHOT","blocking_reason":"per-item verifier, observation completeness, and rights required"},
+    {"id":"zk-golf-submission-source","readiness":"EVALUATION_ONLY","mode":"RECORDED_FIXTURE","blocking_reason":"live completeness and authorization unverified"},
+    {"id":"ecdsa-fail-submission-source","readiness":"EVALUATION_ONLY","mode":"RECORDED_FIXTURE","blocking_reason":"live completeness and authorization unverified"},
+    {"id":"nyu-ctf-bench-corpus","readiness":"EVALUATION_ONLY","mode":"RECORDED_PINNED_CORPUS","blocking_reason":"corpus is not a live submission oracle"},
+    {"id":"nyu-ctf-agents-harness","readiness":"EVALUATION_ONLY","mode":"OFFLINE_TRACE","blocking_reason":"harness reward is telemetry only"},
+    {"id":"ctf-archives-corpus","readiness":"CATALOG_ONLY","mode":"RECORDED_SUBSET","blocking_reason":"item-level rights and reproducibility required"},
+    {"id":"pwn-college-ctf-archive-corpus","readiness":"CATALOG_ONLY","mode":"RECORDED_SUBSET","blocking_reason":"hosted service automation and completeness unsupported"},
+    {"id":"cryptohack-ctf-archive-corpus","readiness":"EVALUATION_ONLY","mode":"RECORDED_SUBSET","blocking_reason":"hosted page is discovery only"},
+    {"id":"public-author-repo-corpus","readiness":"CATALOG_ONLY","mode":"MANIFEST_OVERLAY","blocking_reason":"ambiguous rights block redistribution and settlement"},
+    {"id":"247ctf-manual-source","readiness":"MANUAL_ONLY","mode":"REVIEWED_FIXTURE","blocking_reason":"no authorized automation or completeness model"},
+    {"id":"hyperliquid-hip4-readonly","readiness":"EVALUATION_ONLY","mode":"READ_ONLY","blocking_reason":"no resolution publication capability"},
+    {"id":"hyperliquid-hip4-mock","readiness":"SETTLEMENT_READY","mode":"HERMETIC_MOCK","blocking_reason":null},
+    {"id":"hyperliquid-hip4-publisher","readiness":"UNSUPPORTED","mode":"DISABLED","blocking_reason":"public resolution action, signer role, and authorization model undocumented"}
+  ]
+}

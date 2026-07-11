@@ -1,0 +1,24 @@
+[package]
+name = "outcomes-application"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+outcomes-blobstore = { path = "../outcomes-blobstore" }
+outcomes-corpus = { path = "../outcomes-corpus" }
+outcomes-domain = { path = "../outcomes-domain", features = ["fixtures"] }
+outcomes-evidence = { path = "../outcomes-evidence" }
+outcomes-resolution = { path = "../outcomes-resolution" }
+outcomes-runner = { path = "../outcomes-runner" }
+outcomes-source = { path = "../outcomes-source" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

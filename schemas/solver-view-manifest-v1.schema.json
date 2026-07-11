@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SolverViewManifestV1",
+  "type": "object",
+  "properties": {
+    "challenge_package_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "excluded_secret_digests": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Sha256Digest"
+      }
+    },
+    "exposed_artifact_digests": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Sha256Digest"
+      }
+    },
+    "manifest_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "schema_version": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "challenge_package_digest",
+    "exposed_artifact_digests",
+    "excluded_secret_digests",
+    "manifest_digest"
+  ],
+  "$defs": {
+    "Sha256Digest": {
+      "description": "A SHA-256 digest serialized as 64 lowercase hexadecimal characters.",
+      "type": "string"
+    }
+  }
+}

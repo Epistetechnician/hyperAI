@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OutcomeEvidenceBundleV1",
+  "type": "object",
+  "properties": {
+    "admission_decision_digests": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Sha256Digest"
+      }
+    },
+    "blobs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ContentBlobRefV1"
+      }
+    },
+    "bundle_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "challenge_descriptor_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "claim_id": {
+      "$ref": "#/$defs/ClaimId"
+    },
+    "claim_spec_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "code_build_provenance_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "completeness_assessment_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "dispute_record_digests": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Sha256Digest"
+      }
+    },
+    "evidence_publication_policy_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "execution_manifest_digests": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Sha256Digest"
+      }
+    },
+    "observation_snapshot_digests": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Sha256Digest"
+      }
+    },
+    "qualifying_candidate_digests": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Sha256Digest"
+      }
+    },
+    "resolution_aggregation_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "schema_version": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "claim_id",
+    "claim_spec_digest",
+    "challenge_descriptor_digest",
+    "observation_snapshot_digests",
+    "completeness_assessment_digest",
+    "qualifying_candidate_digests",
+    "admission_decision_digests",
+    "execution_manifest_digests",
+    "resolution_aggregation_digest",
+    "dispute_record_digests",
+    "code_build_provenance_digest",
+    "evidence_publication_policy_digest",
+    "blobs",
+    "bundle_digest"
+  ],
+  "$defs": {
+    "ClaimId": {
+      "description": "A claim ID derived from a claim-spec digest.",
+      "type": "string"
+    },
+    "ContentBlobRefV1": {
+      "type": "object",
+      "properties": {
+        "byte_length": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "classification": {
+          "$ref": "#/$defs/EvidenceClassification"
+        },
+        "digest": {
+          "$ref": "#/$defs/Sha256Digest"
+        },
+        "digest_algorithm": {
+          "type": "string"
+        },
+        "media_type": {
+          "type": "string"
+        },
+        "storage_locator": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "digest_algorithm",
+        "digest",
+        "byte_length",
+        "media_type",
+        "classification",
+        "storage_locator"
+      ]
+    },
+    "EvidenceClassification": {
+      "type": "string",
+      "enum": [
+        "PUBLIC",
+        "EMBARGOED",
+        "OPERATOR_ONLY",
+        "SECRET_REFERENCE_ONLY"
+      ]
+    },
+    "Sha256Digest": {
+      "description": "A SHA-256 digest serialized as 64 lowercase hexadecimal characters.",
+      "type": "string"
+    }
+  }
+}

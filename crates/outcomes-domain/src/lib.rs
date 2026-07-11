@@ -1,0 +1,26 @@
+//! Stable, backend-neutral outcome protocol types and invariants.
+//!
+//! This crate is intentionally free of HTTP, database, object-store, cloud,
+//! container-runtime, Hyperliquid SDK, and challenge-specific dependencies.
+
+mod canonical;
+mod identifiers;
+mod model;
+mod mutation;
+mod records;
+mod state;
+mod timestamp;
+
+#[cfg(any(test, feature = "fixtures"))]
+pub mod fixtures;
+
+pub use canonical::{CanonicalizationError, canonical_json, domain_separated_digest};
+pub use identifiers::{ClaimId, Sha256Digest};
+pub use model::*;
+pub use mutation::{MutationContext, MutationScope, StateSlice, UndeclaredMutation};
+pub use records::*;
+pub use state::{
+    ClaimTruth, ExecutionOutcome, FinalityTransitionError, ResolutionFinality, SettlementLifecycle,
+    SettlementTransitionError,
+};
+pub use timestamp::{TimestampError, UtcTimestamp};

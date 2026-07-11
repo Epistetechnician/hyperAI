@@ -1,0 +1,15 @@
+[package]
+name = "outcomes-worker"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+outcomes-api = { path = "../outcomes-api" }
+outcomes-domain = { path = "../outcomes-domain" }
+serde.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CorpusSnapshotV1",
+  "type": "object",
+  "properties": {
+    "adapter_version": {
+      "type": "string"
+    },
+    "corpus_id": {
+      "type": "string"
+    },
+    "external_artifact_digests": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Sha256Digest"
+      }
+    },
+    "image_digests": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Sha256Digest"
+      }
+    },
+    "lfs_object_digests": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Sha256Digest"
+      }
+    },
+    "received_at": {
+      "$ref": "#/$defs/UtcTimestamp"
+    },
+    "resolved_commit": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "snapshot_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "submodule_digests": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/Sha256Digest"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "corpus_id",
+    "resolved_commit",
+    "snapshot_digest",
+    "submodule_digests",
+    "lfs_object_digests",
+    "image_digests",
+    "external_artifact_digests",
+    "adapter_version",
+    "received_at"
+  ],
+  "$defs": {
+    "Sha256Digest": {
+      "description": "A SHA-256 digest serialized as 64 lowercase hexadecimal characters.",
+      "type": "string"
+    },
+    "UtcTimestamp": {
+      "description": "A canonical UTC RFC 3339 timestamp with whole-second precision.",
+      "type": "string"
+    }
+  }
+}

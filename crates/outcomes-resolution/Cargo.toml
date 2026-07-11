@@ -1,0 +1,18 @@
+[package]
+name = "outcomes-resolution"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+outcomes-domain = { path = "../outcomes-domain" }
+outcomes-evidence = { path = "../outcomes-evidence" }
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+outcomes-domain = { path = "../outcomes-domain", features = ["fixtures"] }
+
+[lints]
+workspace = true

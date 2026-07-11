@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "UnsignedSettlementIntentV1",
+  "type": "object",
+  "properties": {
+    "action_type": {
+      "type": "string"
+    },
+    "backend": {
+      "type": "string"
+    },
+    "binding_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "canonical_payload": {
+      "type": "string"
+    },
+    "expires_at": {
+      "$ref": "#/$defs/UtcTimestamp"
+    },
+    "final_resolution_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "idempotency_key": {
+      "type": "string"
+    },
+    "intent_id": {
+      "type": "string"
+    },
+    "network": {
+      "$ref": "#/$defs/SettlementNetwork"
+    },
+    "payload_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "schema_version": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "intent_id",
+    "backend",
+    "network",
+    "binding_digest",
+    "final_resolution_digest",
+    "action_type",
+    "canonical_payload",
+    "payload_digest",
+    "idempotency_key",
+    "expires_at"
+  ],
+  "$defs": {
+    "SettlementNetwork": {
+      "type": "string",
+      "enum": [
+        "MOCK",
+        "HYPERLIQUID_TESTNET",
+        "HYPERLIQUID_MAINNET_READONLY"
+      ]
+    },
+    "Sha256Digest": {
+      "description": "A SHA-256 digest serialized as 64 lowercase hexadecimal characters.",
+      "type": "string"
+    },
+    "UtcTimestamp": {
+      "description": "A canonical UTC RFC 3339 timestamp with whole-second precision.",
+      "type": "string"
+    }
+  }
+}

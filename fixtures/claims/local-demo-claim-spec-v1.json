@@ -1,0 +1,129 @@
+{
+  "schema_version": "hsai.claim-spec.v1",
+  "claim_id": "claim_7ovtndna5wokusa7wy23dcaphm4xtmur4zcycwtghose5x7lk7aq",
+  "challenge_descriptor_digest": "0101010101010101010101010101010101010101010101010101010101010101",
+  "question": "Did an eligible submission pass the pinned verifier before the deadline?",
+  "predicate": {
+    "kind": "EXISTS_ELIGIBLE_VALIDATOR_PASS"
+  },
+  "eligible_submission_policy": {
+    "accepted_source_namespaces": [
+      "local.demo"
+    ],
+    "allowed_artifact_media_types": [
+      "application/octet-stream"
+    ],
+    "duplicate_semantics": "IGNORE_EXACT_DUPLICATE",
+    "replacement_semantics": "IMMUTABLE_SOURCE_REVISION",
+    "withdrawn_submissions_count": false,
+    "max_artifact_bytes": 1048576,
+    "disclosure_constraints": [],
+    "allow_fetch_after_deadline_if_observed_before": true
+  },
+  "candidate_identity_policy": {
+    "source_identity_required": true,
+    "content_digest_algorithm": "sha256",
+    "author_identity_required": false
+  },
+  "observation_policy": {
+    "source_adapter_id": "local-submission-ledger",
+    "source_adapter_version": "1.0.0",
+    "cursor_required": true,
+    "raw_response_digest_required": true,
+    "pagination_completeness_required": true
+  },
+  "verification_policy": {
+    "validator_artifact_digest": "0202020202020202020202020202020202020202020202020202020202020202",
+    "validator_interface_version": "hsai.validator.result.v1",
+    "environment_digest": "0303030303030303030303030303030303030303030303030303030303030303",
+    "argv": [
+      "/validator/check",
+      "/input/candidate"
+    ],
+    "cpu_architecture": "aarch64",
+    "required_instruction_sets": [],
+    "os_runtime_versions": {
+      "linux": "fixture-v1"
+    },
+    "filesystem_layout_version": "hsai.runner.fs.v1",
+    "network_policy": "DISABLED",
+    "network_allowlist": [],
+    "environment_allowlist": [
+      "LANG",
+      "TZ"
+    ],
+    "locale": "C.UTF-8",
+    "timezone": "UTC",
+    "randomness_policy": "DETERMINISTIC_SEED",
+    "seed_derivation_domain": "hsai.validator.seed.v1",
+    "clock_policy": "INJECTED_LOGICAL_TIME",
+    "resource_limits": {
+      "cpu_millis": 10000,
+      "memory_bytes": 268435456,
+      "process_count": 16,
+      "file_descriptor_count": 64,
+      "output_bytes": 1048576,
+      "disk_bytes": 134217728,
+      "wall_clock_millis": 30000
+    },
+    "retry_count": 0,
+    "output_normalization_version": "hsai.validator.normalize.v1",
+    "result_mapping": {
+      "accepted_status": "PASS",
+      "rejected_status": "FAIL",
+      "inconclusive_status": "INCONCLUSIVE",
+      "unspecified_is_error": true
+    },
+    "determinism_tier": "SEMANTIC_IDENTICAL",
+    "required_replay_count": 2,
+    "required_runner_quorum": 2
+  },
+  "resolution_policy": {
+    "policy_version": "hsai.existential-resolution.v1",
+    "true_requires_eligible_pass": true,
+    "false_requires_deadline_and_grace": true,
+    "false_requires_complete_observation": true,
+    "false_requires_terminal_candidates": true,
+    "infrastructure_failure_maps_to_false": false
+  },
+  "deadline_policy": {
+    "authoritative_time_source": "local-ledger-receipt-time",
+    "boundary": "INCLUSIVE",
+    "submission_deadline": "2026-07-10T12:00:00Z",
+    "permitted_source_clock_skew_seconds": 0,
+    "ingestion_grace_period_seconds": 300,
+    "required_source_finality_depth": 1,
+    "unavailable_source_behavior": "REMAIN_UNRESOLVED",
+    "no_solution_requires_completeness": true
+  },
+  "dispute_policy": {
+    "authority_id": "local-demo-operator",
+    "window_seconds": 600,
+    "allowed_reason_codes": [
+      "COUNTEREXAMPLE"
+    ],
+    "counterexample_candidate_allowed": true,
+    "unresolved_dispute_blocks_finality": true
+  },
+  "attestation_policy": {
+    "policy_version": "hsai.attestation-policy.v1",
+    "threshold": 2,
+    "registered_attestors": 3,
+    "distinct_logical_signers_required": true,
+    "allowed_algorithms": [
+      "Ed25519"
+    ]
+  },
+  "evidence_publication_policy": {
+    "default_classification": "PUBLIC",
+    "public_verification_required": true,
+    "hidden_artifact_commitment_required": true,
+    "disclosure_policy_digest": null
+  },
+  "outcome_mapping": {
+    "true_settlement_fraction": "1",
+    "false_settlement_fraction": "0"
+  },
+  "created_at": "2026-07-10T10:00:00Z",
+  "freeze_not_before": "2026-07-10T10:00:00Z"
+}

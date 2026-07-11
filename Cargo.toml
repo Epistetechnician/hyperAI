@@ -1,0 +1,62 @@
+[workspace]
+resolver = "3"
+members = [
+  "crates/outcomes-domain",
+  "crates/outcomes-registry",
+  "crates/outcomes-corpus",
+  "crates/outcomes-source",
+  "crates/outcomes-harness",
+  "crates/outcomes-runner",
+  "crates/outcomes-evidence",
+  "crates/outcomes-resolution",
+  "crates/outcomes-settlement",
+  "crates/outcomes-application",
+  "crates/outcomes-persistence-sqlx",
+  "crates/outcomes-blobstore",
+  "crates/hyperliquid-hip4",
+  "crates/outcomes-api",
+  "crates/outcomes-cli",
+  "crates/outcomes-worker",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.93.1"
+publish = false
+
+[workspace.dependencies]
+async-trait = "=0.1.89"
+axum = { version = "=0.8.9", default-features = false, features = ["json", "tokio", "http1"] }
+base64 = "=0.22.1"
+clap = { version = "=4.6.1", features = ["derive"] }
+data-encoding = "=2.11.0"
+ed25519-dalek = { version = "=3.0.0", default-features = false, features = ["fast", "zeroize"] }
+getrandom = "=0.4.3"
+proptest = "=1.11.0"
+schemars = { version = "=1.2.1", features = ["derive"] }
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.150"
+serde_json_canonicalizer = "=0.3.2"
+sha2 = "=0.11.0"
+subtle = "=2.6.1"
+sqlx = { version = "=0.8.6", default-features = false, features = ["runtime-tokio", "sqlite", "postgres", "migrate", "json"] }
+tempfile = "=3.27.0"
+thiserror = "=2.0.18"
+time = { version = "=0.3.53", default-features = false, features = ["formatting", "parsing"] }
+tokio = { version = "=1.52.3", default-features = false, features = ["macros", "rt-multi-thread", "sync"] }
+tower = { version = "=0.5.3", features = ["util"] }
+unicode-normalization = "=0.1.25"
+zeroize = "=1.9.0"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage)"] }
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"

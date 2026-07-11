@@ -1,0 +1,670 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ClaimSpecV1",
+  "type": "object",
+  "properties": {
+    "attestation_policy": {
+      "$ref": "#/$defs/AttestationPolicyV1"
+    },
+    "candidate_identity_policy": {
+      "$ref": "#/$defs/CandidateIdentityPolicyV1"
+    },
+    "challenge_descriptor_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "claim_id": {
+      "$ref": "#/$defs/ClaimId"
+    },
+    "created_at": {
+      "$ref": "#/$defs/UtcTimestamp"
+    },
+    "deadline_policy": {
+      "$ref": "#/$defs/DeadlinePolicyV1"
+    },
+    "dispute_policy": {
+      "$ref": "#/$defs/DisputePolicyV1"
+    },
+    "eligible_submission_policy": {
+      "$ref": "#/$defs/EligibleSubmissionPolicyV1"
+    },
+    "evidence_publication_policy": {
+      "$ref": "#/$defs/EvidencePublicationPolicyV1"
+    },
+    "extensions": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "freeze_not_before": {
+      "$ref": "#/$defs/UtcTimestamp"
+    },
+    "observation_policy": {
+      "$ref": "#/$defs/ObservationPolicyV1"
+    },
+    "outcome_mapping": {
+      "$ref": "#/$defs/OutcomeMappingV1"
+    },
+    "predicate": {
+      "$ref": "#/$defs/PredicateV1"
+    },
+    "question": {
+      "type": "string"
+    },
+    "resolution_policy": {
+      "$ref": "#/$defs/ResolutionPolicyV1"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "verification_policy": {
+      "$ref": "#/$defs/VerificationPolicyV1"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "claim_id",
+    "challenge_descriptor_digest",
+    "question",
+    "predicate",
+    "eligible_submission_policy",
+    "candidate_identity_policy",
+    "observation_policy",
+    "verification_policy",
+    "resolution_policy",
+    "deadline_policy",
+    "dispute_policy",
+    "attestation_policy",
+    "evidence_publication_policy",
+    "outcome_mapping",
+    "created_at",
+    "freeze_not_before"
+  ],
+  "$defs": {
+    "AttestationPolicyV1": {
+      "type": "object",
+      "properties": {
+        "allowed_algorithms": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "distinct_logical_signers_required": {
+          "type": "boolean"
+        },
+        "policy_version": {
+          "type": "string"
+        },
+        "registered_attestors": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "threshold": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "policy_version",
+        "threshold",
+        "registered_attestors",
+        "distinct_logical_signers_required",
+        "allowed_algorithms"
+      ]
+    },
+    "CandidateIdentityPolicyV1": {
+      "type": "object",
+      "properties": {
+        "author_identity_required": {
+          "type": "boolean"
+        },
+        "content_digest_algorithm": {
+          "type": "string"
+        },
+        "source_identity_required": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "source_identity_required",
+        "content_digest_algorithm",
+        "author_identity_required"
+      ]
+    },
+    "ClaimId": {
+      "description": "A claim ID derived from a claim-spec digest.",
+      "type": "string"
+    },
+    "ClockPolicy": {
+      "type": "string",
+      "enum": [
+        "INJECTED_LOGICAL_TIME"
+      ]
+    },
+    "DeadlineBoundary": {
+      "type": "string",
+      "enum": [
+        "INCLUSIVE",
+        "EXCLUSIVE"
+      ]
+    },
+    "DeadlinePolicyV1": {
+      "type": "object",
+      "properties": {
+        "authoritative_time_source": {
+          "type": "string"
+        },
+        "boundary": {
+          "$ref": "#/$defs/DeadlineBoundary"
+        },
+        "ingestion_grace_period_seconds": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "no_solution_requires_completeness": {
+          "type": "boolean"
+        },
+        "permitted_source_clock_skew_seconds": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "required_source_finality_depth": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "submission_deadline": {
+          "$ref": "#/$defs/UtcTimestamp"
+        },
+        "unavailable_source_behavior": {
+          "$ref": "#/$defs/UnavailableSourceBehavior"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "authoritative_time_source",
+        "boundary",
+        "submission_deadline",
+        "permitted_source_clock_skew_seconds",
+        "ingestion_grace_period_seconds",
+        "required_source_finality_depth",
+        "unavailable_source_behavior",
+        "no_solution_requires_completeness"
+      ]
+    },
+    "DeterminismTier": {
+      "type": "string",
+      "enum": [
+        "BYTE_IDENTICAL",
+        "SEMANTIC_IDENTICAL",
+        "QUORUM_ONLY"
+      ]
+    },
+    "DisputePolicyV1": {
+      "type": "object",
+      "properties": {
+        "allowed_reason_codes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "authority_id": {
+          "type": "string"
+        },
+        "counterexample_candidate_allowed": {
+          "type": "boolean"
+        },
+        "unresolved_dispute_blocks_finality": {
+          "type": "boolean"
+        },
+        "window_seconds": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "authority_id",
+        "window_seconds",
+        "allowed_reason_codes",
+        "counterexample_candidate_allowed",
+        "unresolved_dispute_blocks_finality"
+      ]
+    },
+    "DuplicateSemantics": {
+      "type": "string",
+      "enum": [
+        "IGNORE_EXACT_DUPLICATE"
+      ]
+    },
+    "EligibleSubmissionPolicyV1": {
+      "type": "object",
+      "properties": {
+        "accepted_source_namespaces": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "allow_fetch_after_deadline_if_observed_before": {
+          "type": "boolean"
+        },
+        "allowed_artifact_media_types": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "disclosure_constraints": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "duplicate_semantics": {
+          "$ref": "#/$defs/DuplicateSemantics"
+        },
+        "max_artifact_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "replacement_semantics": {
+          "$ref": "#/$defs/ReplacementSemantics"
+        },
+        "withdrawn_submissions_count": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "accepted_source_namespaces",
+        "allowed_artifact_media_types",
+        "duplicate_semantics",
+        "replacement_semantics",
+        "withdrawn_submissions_count",
+        "max_artifact_bytes",
+        "disclosure_constraints",
+        "allow_fetch_after_deadline_if_observed_before"
+      ]
+    },
+    "EvidenceClassification": {
+      "type": "string",
+      "enum": [
+        "PUBLIC",
+        "EMBARGOED",
+        "OPERATOR_ONLY",
+        "SECRET_REFERENCE_ONLY"
+      ]
+    },
+    "EvidencePublicationPolicyV1": {
+      "type": "object",
+      "properties": {
+        "default_classification": {
+          "$ref": "#/$defs/EvidenceClassification"
+        },
+        "disclosure_policy_digest": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sha256Digest"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hidden_artifact_commitment_required": {
+          "type": "boolean"
+        },
+        "public_verification_required": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "default_classification",
+        "public_verification_required",
+        "hidden_artifact_commitment_required"
+      ]
+    },
+    "NetworkPolicy": {
+      "type": "string",
+      "enum": [
+        "DISABLED",
+        "ALLOWLISTED"
+      ]
+    },
+    "ObservationPolicyV1": {
+      "type": "object",
+      "properties": {
+        "cursor_required": {
+          "type": "boolean"
+        },
+        "pagination_completeness_required": {
+          "type": "boolean"
+        },
+        "raw_response_digest_required": {
+          "type": "boolean"
+        },
+        "source_adapter_id": {
+          "type": "string"
+        },
+        "source_adapter_version": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "source_adapter_id",
+        "source_adapter_version",
+        "cursor_required",
+        "raw_response_digest_required",
+        "pagination_completeness_required"
+      ]
+    },
+    "OutcomeMappingV1": {
+      "type": "object",
+      "properties": {
+        "false_settlement_fraction": {
+          "type": "string"
+        },
+        "true_settlement_fraction": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "true_settlement_fraction",
+        "false_settlement_fraction"
+      ]
+    },
+    "PredicateKind": {
+      "type": "string",
+      "enum": [
+        "EXISTS_ELIGIBLE_VALIDATOR_PASS"
+      ]
+    },
+    "PredicateV1": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/PredicateKind"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ]
+    },
+    "RandomnessPolicy": {
+      "type": "string",
+      "enum": [
+        "FORBIDDEN",
+        "DETERMINISTIC_SEED"
+      ]
+    },
+    "ReplacementSemantics": {
+      "type": "string",
+      "enum": [
+        "IMMUTABLE_SOURCE_REVISION",
+        "LATEST_OBSERVED_BEFORE_DEADLINE"
+      ]
+    },
+    "ResolutionPolicyV1": {
+      "type": "object",
+      "properties": {
+        "false_requires_complete_observation": {
+          "type": "boolean"
+        },
+        "false_requires_deadline_and_grace": {
+          "type": "boolean"
+        },
+        "false_requires_terminal_candidates": {
+          "type": "boolean"
+        },
+        "infrastructure_failure_maps_to_false": {
+          "type": "boolean"
+        },
+        "policy_version": {
+          "type": "string"
+        },
+        "true_requires_eligible_pass": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "policy_version",
+        "true_requires_eligible_pass",
+        "false_requires_deadline_and_grace",
+        "false_requires_complete_observation",
+        "false_requires_terminal_candidates",
+        "infrastructure_failure_maps_to_false"
+      ]
+    },
+    "ResourceLimitsV1": {
+      "type": "object",
+      "properties": {
+        "cpu_millis": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "disk_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "file_descriptor_count": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "memory_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "output_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "process_count": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "wall_clock_millis": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "cpu_millis",
+        "memory_bytes",
+        "process_count",
+        "file_descriptor_count",
+        "output_bytes",
+        "disk_bytes",
+        "wall_clock_millis"
+      ]
+    },
+    "ResultMappingV1": {
+      "type": "object",
+      "properties": {
+        "accepted_status": {
+          "type": "string"
+        },
+        "inconclusive_status": {
+          "type": "string"
+        },
+        "rejected_status": {
+          "type": "string"
+        },
+        "unspecified_is_error": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "accepted_status",
+        "rejected_status",
+        "inconclusive_status",
+        "unspecified_is_error"
+      ]
+    },
+    "Sha256Digest": {
+      "description": "A SHA-256 digest serialized as 64 lowercase hexadecimal characters.",
+      "type": "string"
+    },
+    "UnavailableSourceBehavior": {
+      "type": "string",
+      "enum": [
+        "REMAIN_UNRESOLVED"
+      ]
+    },
+    "UtcTimestamp": {
+      "description": "A canonical UTC RFC 3339 timestamp with whole-second precision.",
+      "type": "string"
+    },
+    "VerificationPolicyV1": {
+      "type": "object",
+      "properties": {
+        "argv": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "clock_policy": {
+          "$ref": "#/$defs/ClockPolicy"
+        },
+        "cpu_architecture": {
+          "type": "string"
+        },
+        "determinism_tier": {
+          "$ref": "#/$defs/DeterminismTier"
+        },
+        "environment_allowlist": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "environment_digest": {
+          "$ref": "#/$defs/Sha256Digest"
+        },
+        "filesystem_layout_version": {
+          "type": "string"
+        },
+        "locale": {
+          "type": "string"
+        },
+        "network_allowlist": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "network_policy": {
+          "$ref": "#/$defs/NetworkPolicy"
+        },
+        "os_runtime_versions": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "output_normalization_version": {
+          "type": "string"
+        },
+        "randomness_policy": {
+          "$ref": "#/$defs/RandomnessPolicy"
+        },
+        "required_instruction_sets": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "required_replay_count": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "required_runner_quorum": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "resource_limits": {
+          "$ref": "#/$defs/ResourceLimitsV1"
+        },
+        "result_mapping": {
+          "$ref": "#/$defs/ResultMappingV1"
+        },
+        "retry_count": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "seed_derivation_domain": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "validator_artifact_digest": {
+          "$ref": "#/$defs/Sha256Digest"
+        },
+        "validator_interface_version": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "validator_artifact_digest",
+        "validator_interface_version",
+        "environment_digest",
+        "argv",
+        "cpu_architecture",
+        "required_instruction_sets",
+        "os_runtime_versions",
+        "filesystem_layout_version",
+        "network_policy",
+        "network_allowlist",
+        "environment_allowlist",
+        "locale",
+        "timezone",
+        "randomness_policy",
+        "clock_policy",
+        "resource_limits",
+        "retry_count",
+        "output_normalization_version",
+        "result_mapping",
+        "determinism_tier",
+        "required_replay_count",
+        "required_runner_quorum"
+      ]
+    }
+  }
+}

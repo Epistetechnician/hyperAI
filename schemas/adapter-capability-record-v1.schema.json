@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AdapterCapabilityRecordV1",
+  "type": "object",
+  "properties": {
+    "adapter_id": {
+      "type": "string"
+    },
+    "adapter_version": {
+      "type": "string"
+    },
+    "authenticated_access_required": {
+      "type": "boolean"
+    },
+    "blocking_reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "candidate_ingestion": {
+      "type": "boolean"
+    },
+    "ci_fixture_available": {
+      "type": "boolean"
+    },
+    "completeness_attestation": {
+      "type": "boolean"
+    },
+    "deadline_evidence": {
+      "type": "boolean"
+    },
+    "determinism_tier": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DeterminismTier"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "discovery_catalog": {
+      "type": "boolean"
+    },
+    "external_network_required": {
+      "type": "boolean"
+    },
+    "immutable_snapshot": {
+      "type": "boolean"
+    },
+    "live_observation": {
+      "type": "boolean"
+    },
+    "local_materialization": {
+      "type": "boolean"
+    },
+    "local_rehosting": {
+      "type": "boolean"
+    },
+    "rights_status": {
+      "$ref": "#/$defs/RightsStatus"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "secret_isolation": {
+      "type": "boolean"
+    },
+    "settlement_readiness": {
+      "$ref": "#/$defs/SettlementReadiness"
+    },
+    "supported_architectures": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "supported_categories": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "verified_at": {
+      "$ref": "#/$defs/UtcTimestamp"
+    },
+    "verifier_available": {
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "adapter_id",
+    "adapter_version",
+    "discovery_catalog",
+    "immutable_snapshot",
+    "local_materialization",
+    "local_rehosting",
+    "verifier_available",
+    "secret_isolation",
+    "candidate_ingestion",
+    "live_observation",
+    "deadline_evidence",
+    "completeness_attestation",
+    "authenticated_access_required",
+    "rights_status",
+    "supported_categories",
+    "supported_architectures",
+    "external_network_required",
+    "ci_fixture_available",
+    "settlement_readiness",
+    "verified_at"
+  ],
+  "$defs": {
+    "DeterminismTier": {
+      "type": "string",
+      "enum": [
+        "BYTE_IDENTICAL",
+        "SEMANTIC_IDENTICAL",
+        "QUORUM_ONLY"
+      ]
+    },
+    "RightsStatus": {
+      "type": "string",
+      "enum": [
+        "PERMITTED",
+        "RESTRICTED",
+        "AMBIGUOUS",
+        "UNKNOWN"
+      ]
+    },
+    "SettlementReadiness": {
+      "type": "string",
+      "enum": [
+        "SETTLEMENT_READY",
+        "EVALUATION_ONLY",
+        "CATALOG_ONLY",
+        "MANUAL_ONLY",
+        "UNSUPPORTED"
+      ]
+    },
+    "UtcTimestamp": {
+      "description": "A canonical UTC RFC 3339 timestamp with whole-second precision.",
+      "type": "string"
+    }
+  }
+}

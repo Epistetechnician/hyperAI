@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AdapterHealthV1",
+  "type": "object",
+  "properties": {
+    "adapter_id": {
+      "type": "string"
+    },
+    "checked_at": {
+      "$ref": "#/$defs/UtcTimestamp"
+    },
+    "exact_reason": {
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/AdapterHealthStatus"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "adapter_id",
+    "status",
+    "checked_at",
+    "exact_reason"
+  ],
+  "$defs": {
+    "AdapterHealthStatus": {
+      "type": "string",
+      "enum": [
+        "HEALTHY",
+        "DEGRADED",
+        "UNAVAILABLE"
+      ]
+    },
+    "UtcTimestamp": {
+      "description": "A canonical UTC RFC 3339 timestamp with whole-second precision.",
+      "type": "string"
+    }
+  }
+}

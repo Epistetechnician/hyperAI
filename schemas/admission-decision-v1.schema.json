@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AdmissionDecisionV1",
+  "type": "object",
+  "properties": {
+    "artifact_policy_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "candidate_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "claim_spec_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "decision": {
+      "$ref": "#/$defs/AdmissionDecisionKind"
+    },
+    "decision_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "decision_id": {
+      "type": "string"
+    },
+    "environment_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "policy_version": {
+      "type": "string"
+    },
+    "reason_codes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "resource_budget_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "risk_classification": {
+      "type": "string"
+    },
+    "sandbox_policy_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "secrets_policy_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "source_provenance_status": {
+      "type": "string"
+    },
+    "validator_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "decision_id",
+    "claim_spec_digest",
+    "candidate_digest",
+    "validator_digest",
+    "environment_digest",
+    "source_provenance_status",
+    "artifact_policy_digest",
+    "sandbox_policy_digest",
+    "resource_budget_digest",
+    "secrets_policy_digest",
+    "risk_classification",
+    "decision",
+    "reason_codes",
+    "policy_version",
+    "decision_digest"
+  ],
+  "$defs": {
+    "AdmissionDecisionKind": {
+      "type": "string",
+      "enum": [
+        "ALLOW",
+        "DENY",
+        "MANUAL_REVIEW"
+      ]
+    },
+    "Sha256Digest": {
+      "description": "A SHA-256 digest serialized as 64 lowercase hexadecimal characters.",
+      "type": "string"
+    }
+  }
+}

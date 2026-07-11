@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ChallengeDescriptorV1",
+  "type": "object",
+  "properties": {
+    "canonical_spec_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "canonical_spec_uri": {
+      "type": "string"
+    },
+    "challenge_id": {
+      "type": "string"
+    },
+    "created_at": {
+      "$ref": "#/$defs/UtcTimestamp"
+    },
+    "display_metadata": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "display_name": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "source_adapter_kind": {
+      "type": "string"
+    },
+    "source_adapter_version": {
+      "type": "string"
+    },
+    "source_challenge_ref": {
+      "type": "string"
+    },
+    "source_namespace": {
+      "type": "string"
+    },
+    "source_platform": {
+      "type": "string"
+    },
+    "source_terms_uri": {
+      "type": "string"
+    },
+    "source_timezone": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "challenge_id",
+    "source_platform",
+    "source_namespace",
+    "source_challenge_ref",
+    "display_name",
+    "canonical_spec_uri",
+    "canonical_spec_digest",
+    "source_terms_uri",
+    "source_timezone",
+    "source_adapter_kind",
+    "source_adapter_version",
+    "created_at"
+  ],
+  "$defs": {
+    "Sha256Digest": {
+      "description": "A SHA-256 digest serialized as 64 lowercase hexadecimal characters.",
+      "type": "string"
+    },
+    "UtcTimestamp": {
+      "description": "A canonical UTC RFC 3339 timestamp with whole-second precision.",
+      "type": "string"
+    }
+  }
+}

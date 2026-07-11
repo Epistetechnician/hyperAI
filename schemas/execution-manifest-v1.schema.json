@@ -1,0 +1,241 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ExecutionManifestV1",
+  "type": "object",
+  "properties": {
+    "admission_decision_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "argv": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "candidate_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "claim_spec_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "declared_nondeterminism": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "determinism_tier": {
+      "$ref": "#/$defs/DeterminismTier"
+    },
+    "ended_at": {
+      "$ref": "#/$defs/UtcTimestamp"
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "environment_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "host_compatibility_facts": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "infrastructure_classification": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "input_manifest_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "logical_time": {
+      "$ref": "#/$defs/UtcTimestamp"
+    },
+    "normalization_policy_version": {
+      "type": "string"
+    },
+    "normalized_outcome": {
+      "$ref": "#/$defs/ExecutionOutcome"
+    },
+    "out_of_memory": {
+      "type": "boolean"
+    },
+    "output_manifest_digest": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Sha256Digest"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "raw_exit_status": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int32"
+    },
+    "resource_limits_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "resource_usage": {
+      "$ref": "#/$defs/ResourceUsageV1"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "runner_build_version": {
+      "type": "string"
+    },
+    "runner_implementation": {
+      "type": "string"
+    },
+    "sandbox_policy_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "signal": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int32"
+    },
+    "started_at": {
+      "$ref": "#/$defs/UtcTimestamp"
+    },
+    "stderr_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "stdout_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "timed_out": {
+      "type": "boolean"
+    },
+    "verifier_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "claim_spec_digest",
+    "candidate_digest",
+    "admission_decision_digest",
+    "verifier_digest",
+    "environment_digest",
+    "runner_implementation",
+    "runner_build_version",
+    "host_compatibility_facts",
+    "argv",
+    "environment",
+    "sandbox_policy_digest",
+    "input_manifest_digest",
+    "resource_limits_digest",
+    "resource_usage",
+    "started_at",
+    "ended_at",
+    "logical_time",
+    "timed_out",
+    "out_of_memory",
+    "stdout_digest",
+    "stderr_digest",
+    "normalized_outcome",
+    "normalization_policy_version",
+    "determinism_tier",
+    "declared_nondeterminism"
+  ],
+  "$defs": {
+    "DeterminismTier": {
+      "type": "string",
+      "enum": [
+        "BYTE_IDENTICAL",
+        "SEMANTIC_IDENTICAL",
+        "QUORUM_ONLY"
+      ]
+    },
+    "ExecutionOutcome": {
+      "description": "Normalized outcome of one validator execution.",
+      "oneOf": [
+        {
+          "description": "The pinned validator deterministically accepted the candidate.",
+          "type": "string",
+          "const": "PASS"
+        },
+        {
+          "description": "The validator ran correctly and rejected the candidate.",
+          "type": "string",
+          "const": "FAIL"
+        },
+        {
+          "description": "The validator ran but cannot safely decide the predicate.",
+          "type": "string",
+          "const": "INCONCLUSIVE"
+        },
+        {
+          "description": "Infrastructure, runner, timeout, OOM, or malformed-output failure.",
+          "type": "string",
+          "const": "ERROR"
+        }
+      ]
+    },
+    "ResourceUsageV1": {
+      "type": "object",
+      "properties": {
+        "cpu_millis": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "disk_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "output_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "peak_memory_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "wall_clock_millis": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "cpu_millis",
+        "peak_memory_bytes",
+        "output_bytes",
+        "disk_bytes",
+        "wall_clock_millis"
+      ]
+    },
+    "Sha256Digest": {
+      "description": "A SHA-256 digest serialized as 64 lowercase hexadecimal characters.",
+      "type": "string"
+    },
+    "UtcTimestamp": {
+      "description": "A canonical UTC RFC 3339 timestamp with whole-second precision.",
+      "type": "string"
+    }
+  }
+}

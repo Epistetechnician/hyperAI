@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CorpusDescriptorV1",
+  "type": "object",
+  "properties": {
+    "adapter_id": {
+      "type": "string"
+    },
+    "corpus_id": {
+      "type": "string"
+    },
+    "created_at": {
+      "$ref": "#/$defs/UtcTimestamp"
+    },
+    "discovery_ref": {
+      "type": "string"
+    },
+    "rights_status": {
+      "$ref": "#/$defs/RightsStatus"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "upstream_uri": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "corpus_id",
+    "adapter_id",
+    "upstream_uri",
+    "discovery_ref",
+    "rights_status",
+    "created_at"
+  ],
+  "$defs": {
+    "RightsStatus": {
+      "type": "string",
+      "enum": [
+        "PERMITTED",
+        "RESTRICTED",
+        "AMBIGUOUS",
+        "UNKNOWN"
+      ]
+    },
+    "UtcTimestamp": {
+      "description": "A canonical UTC RFC 3339 timestamp with whole-second precision.",
+      "type": "string"
+    }
+  }
+}

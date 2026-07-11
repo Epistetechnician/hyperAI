@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AgentHarnessDescriptorV1",
+  "type": "object",
+  "properties": {
+    "container_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "harness_id": {
+      "type": "string"
+    },
+    "harness_version": {
+      "type": "string"
+    },
+    "live_model_supported": {
+      "type": "boolean"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "source_commit": {
+      "type": "string"
+    },
+    "supported_entrypoints": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "harness_id",
+    "harness_version",
+    "source_commit",
+    "container_digest",
+    "supported_entrypoints",
+    "live_model_supported"
+  ],
+  "$defs": {
+    "Sha256Digest": {
+      "description": "A SHA-256 digest serialized as 64 lowercase hexadecimal characters.",
+      "type": "string"
+    }
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AgentTraceBundleV1",
+  "type": "object",
+  "properties": {
+    "bundle_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "public_summary_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "trace_blob_digests": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Sha256Digest"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "trace_blob_digests",
+    "public_summary_digest",
+    "bundle_digest"
+  ],
+  "$defs": {
+    "Sha256Digest": {
+      "description": "A SHA-256 digest serialized as 64 lowercase hexadecimal characters.",
+      "type": "string"
+    }
+  }
+}

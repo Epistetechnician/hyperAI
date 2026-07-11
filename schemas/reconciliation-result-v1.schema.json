@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ReconciliationResultV1",
+  "type": "object",
+  "properties": {
+    "binding_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "checked_at": {
+      "$ref": "#/$defs/UtcTimestamp"
+    },
+    "exact_reason": {
+      "type": "string"
+    },
+    "external_status_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "final_resolution_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "receipt_digest": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Sha256Digest"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "settlement_lifecycle": {
+      "$ref": "#/$defs/SettlementLifecycle"
+    },
+    "status": {
+      "$ref": "#/$defs/ReconciliationStatus"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "binding_digest",
+    "final_resolution_digest",
+    "external_status_digest",
+    "status",
+    "settlement_lifecycle",
+    "checked_at",
+    "exact_reason"
+  ],
+  "$defs": {
+    "ReconciliationStatus": {
+      "type": "string",
+      "enum": [
+        "CONFIRMED",
+        "PENDING",
+        "MISMATCH",
+        "UNKNOWN"
+      ]
+    },
+    "SettlementLifecycle": {
+      "description": "Lifecycle of one external settlement binding.",
+      "oneOf": [
+        {
+          "description": "No external market is bound.",
+          "type": "string",
+          "const": "UNBOUND"
+        },
+        {
+          "description": "A digest-bound external market binding exists.",
+          "type": "string",
+          "const": "BOUND"
+        },
+        {
+          "description": "One or more readiness prerequisites are absent.",
+          "type": "string",
+          "const": "NOT_READY"
+        },
+        {
+          "description": "All frozen preflight prerequisites are currently satisfied.",
+          "type": "string",
+          "const": "READY"
+        },
+        {
+          "description": "A deterministic unsigned intent was persisted.",
+          "type": "string",
+          "const": "INTENT_BUILT"
+        },
+        {
+          "description": "A backend accepted or may have accepted the intent.",
+          "type": "string",
+          "const": "SUBMITTED"
+        },
+        {
+          "description": "External authoritative status agrees with the final resolution.",
+          "type": "string",
+          "const": "CONFIRMED"
+        },
+        {
+          "description": "External status could not be reconciled safely.",
+          "type": "string",
+          "const": "RECONCILIATION_FAILED"
+        },
+        {
+          "description": "An operator or policy pause blocks further effects.",
+          "type": "string",
+          "const": "PAUSED"
+        }
+      ]
+    },
+    "Sha256Digest": {
+      "description": "A SHA-256 digest serialized as 64 lowercase hexadecimal characters.",
+      "type": "string"
+    },
+    "UtcTimestamp": {
+      "description": "A canonical UTC RFC 3339 timestamp with whole-second precision.",
+      "type": "string"
+    }
+  }
+}

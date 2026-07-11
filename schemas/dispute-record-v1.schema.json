@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DisputeRecordV1",
+  "type": "object",
+  "properties": {
+    "authenticated_actor_id": {
+      "type": "string"
+    },
+    "claim_id": {
+      "$ref": "#/$defs/ClaimId"
+    },
+    "closes_at": {
+      "$ref": "#/$defs/UtcTimestamp"
+    },
+    "counterexample_candidate_digest": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Sha256Digest"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "decision_rationale": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "dispute_id": {
+      "type": "string"
+    },
+    "evidence_digests": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Sha256Digest"
+      }
+    },
+    "opened_at": {
+      "$ref": "#/$defs/UtcTimestamp"
+    },
+    "provisional_resolution_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "reason_code": {
+      "type": "string"
+    },
+    "record_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/DisputeStatus"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "dispute_id",
+    "claim_id",
+    "provisional_resolution_digest",
+    "opened_at",
+    "closes_at",
+    "authenticated_actor_id",
+    "reason_code",
+    "evidence_digests",
+    "status",
+    "record_digest"
+  ],
+  "$defs": {
+    "ClaimId": {
+      "description": "A claim ID derived from a claim-spec digest.",
+      "type": "string"
+    },
+    "DisputeStatus": {
+      "type": "string",
+      "enum": [
+        "OPEN",
+        "REJECTED",
+        "ACCEPTED_SUPERSEDED_BEFORE_FINALITY",
+        "UNRESOLVED_ESCALATED"
+      ]
+    },
+    "Sha256Digest": {
+      "description": "A SHA-256 digest serialized as 64 lowercase hexadecimal characters.",
+      "type": "string"
+    },
+    "UtcTimestamp": {
+      "description": "A canonical UTC RFC 3339 timestamp with whole-second precision.",
+      "type": "string"
+    }
+  }
+}

@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ChallengePackageV1",
+  "type": "object",
+  "properties": {
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PackageArtifactV1"
+      }
+    },
+    "challenge_ref": {
+      "type": "string"
+    },
+    "corpus_snapshot_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "package_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "package_id": {
+      "type": "string"
+    },
+    "rights_assessment_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "runtime_manifest_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "solver_view_manifest_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "verifier_manifest_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "package_id",
+    "corpus_snapshot_digest",
+    "challenge_ref",
+    "artifacts",
+    "runtime_manifest_digest",
+    "verifier_manifest_digest",
+    "solver_view_manifest_digest",
+    "rights_assessment_digest",
+    "package_digest"
+  ],
+  "$defs": {
+    "PackageArtifactV1": {
+      "type": "object",
+      "properties": {
+        "byte_length": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "digest": {
+          "$ref": "#/$defs/Sha256Digest"
+        },
+        "executable": {
+          "type": "boolean"
+        },
+        "logical_path": {
+          "type": "string"
+        },
+        "media_type": {
+          "type": "string"
+        },
+        "visibility": {
+          "$ref": "#/$defs/PackageVisibility"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "logical_path",
+        "digest",
+        "byte_length",
+        "media_type",
+        "visibility",
+        "executable"
+      ]
+    },
+    "PackageVisibility": {
+      "type": "string",
+      "enum": [
+        "SOLVER_PUBLIC",
+        "RUNTIME_PRIVATE",
+        "VERIFIER_ONLY",
+        "CONTAMINATION_SENSITIVE",
+        "BUILD_INPUT"
+      ]
+    },
+    "Sha256Digest": {
+      "description": "A SHA-256 digest serialized as 64 lowercase hexadecimal characters.",
+      "type": "string"
+    }
+  }
+}

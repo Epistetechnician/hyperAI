@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ResolutionAttestationV1",
+  "type": "object",
+  "properties": {
+    "algorithm": {
+      "type": "string"
+    },
+    "claim_id": {
+      "$ref": "#/$defs/ClaimId"
+    },
+    "claim_spec_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "completeness_evidence_digest": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Sha256Digest"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "dispute_window_end": {
+      "$ref": "#/$defs/UtcTimestamp"
+    },
+    "dispute_window_start": {
+      "$ref": "#/$defs/UtcTimestamp"
+    },
+    "evidence_bundle_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "finality": {
+      "$ref": "#/$defs/ResolutionFinality"
+    },
+    "issued_at": {
+      "$ref": "#/$defs/UtcTimestamp"
+    },
+    "key_id": {
+      "type": "string"
+    },
+    "logical_sequence": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "qualifying_run_digests": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Sha256Digest"
+      }
+    },
+    "resolution_policy_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "signature": {
+      "type": "string"
+    },
+    "signer_id": {
+      "type": "string"
+    },
+    "supersedes_non_settling_record": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Sha256Digest"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "truth": {
+      "$ref": "#/$defs/ClaimTruth"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "claim_id",
+    "claim_spec_digest",
+    "truth",
+    "finality",
+    "resolution_policy_digest",
+    "evidence_bundle_digest",
+    "qualifying_run_digests",
+    "dispute_window_start",
+    "dispute_window_end",
+    "issued_at",
+    "logical_sequence",
+    "signer_id",
+    "key_id",
+    "algorithm",
+    "signature"
+  ],
+  "$defs": {
+    "ClaimId": {
+      "description": "A claim ID derived from a claim-spec digest.",
+      "type": "string"
+    },
+    "ClaimTruth": {
+      "description": "Truth value of the frozen existential claim.",
+      "oneOf": [
+        {
+          "description": "At least one eligible candidate satisfied the pinned verifier policy.",
+          "type": "string",
+          "const": "TRUE"
+        },
+        {
+          "description": "The complete negative-resolution prerequisites were satisfied.",
+          "type": "string",
+          "const": "FALSE"
+        },
+        {
+          "description": "Available evidence cannot safely decide the claim.",
+          "type": "string",
+          "const": "UNRESOLVED"
+        }
+      ]
+    },
+    "ResolutionFinality": {
+      "description": "Finality state of a resolution record.",
+      "oneOf": [
+        {
+          "description": "No resolution proposal exists.",
+          "type": "string",
+          "const": "NONE"
+        },
+        {
+          "description": "A provisional resolution exists inside its dispute policy.",
+          "type": "string",
+          "const": "PROVISIONAL"
+        },
+        {
+          "description": "A blocking dispute is active.",
+          "type": "string",
+          "const": "DISPUTED"
+        },
+        {
+          "description": "The immutable final-resolution event has been emitted.",
+          "type": "string",
+          "const": "FINAL"
+        }
+      ]
+    },
+    "Sha256Digest": {
+      "description": "A SHA-256 digest serialized as 64 lowercase hexadecimal characters.",
+      "type": "string"
+    },
+    "UtcTimestamp": {
+      "description": "A canonical UTC RFC 3339 timestamp with whole-second precision.",
+      "type": "string"
+    }
+  }
+}

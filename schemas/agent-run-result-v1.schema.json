@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AgentRunResultV1",
+  "type": "object",
+  "properties": {
+    "candidate_digests": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Sha256Digest"
+      }
+    },
+    "completed_at": {
+      "$ref": "#/$defs/UtcTimestamp"
+    },
+    "harness_reward_microunits": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int64"
+    },
+    "plan_id": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "runtime_millis": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "token_usage": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "tool_call_count": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "plan_id",
+    "candidate_digests",
+    "token_usage",
+    "tool_call_count",
+    "runtime_millis",
+    "completed_at"
+  ],
+  "$defs": {
+    "Sha256Digest": {
+      "description": "A SHA-256 digest serialized as 64 lowercase hexadecimal characters.",
+      "type": "string"
+    },
+    "UtcTimestamp": {
+      "description": "A canonical UTC RFC 3339 timestamp with whole-second precision.",
+      "type": "string"
+    }
+  }
+}
