@@ -5,7 +5,19 @@ use outcomes_domain::{
     UtcTimestamp,
 };
 use serde::{Deserialize, Serialize};
+use std::fmt::Write as _;
 use thiserror::Error;
+
+/// `OpenMetrics` 1.0 content type for [`OperationalSnapshot::to_openmetrics`].
+pub const OPENMETRICS_CONTENT_TYPE: &str =
+    "application/openmetrics-text; version=1.0.0; charset=utf-8";
+
+/// Hard ceiling for one fixed-schema operational snapshot export.
+///
+/// The current schema is substantially smaller. This limit prevents an
+/// accidental future change from turning the dependency-free renderer into an
+/// unbounded serialization surface.
+pub const MAX_OPENMETRICS_EXPORT_BYTES: usize = 16 * 1024;
 
 /// Durable worker job status persisted in the `durable_jobs` table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,6 +57,36 @@ pub struct OperationalSnapshot {
     pub outbox_backlog: u64,
     /// Denied operator/API requests.
     pub unauthorized_attempts: u64,
+}
+
+/// Failure to validate or render a fixed-schema operational snapshot.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum MetricsExportError {
+    /// A counter group overflowed while its projection invariant was checked.
+    #[error("operational snapshot {group} counter sum overflowed")]
+    CounterOverflow {
+        /// Fixed counter group name; never externally supplied.
+        group: &'static str,
+    },
+    /// Every observed claim has exactly one truth and one finality projection.
+    #[error(
+        "operational snapshot claim/finality totals differ: claims={claims}, finality={finality}"
+    )]
+    ClaimFinalityMismatch {
+        /// Number of projected claims.
+        claims: u64,
+        /// Number of projected finality states.
+        finality: u64,
+    },
+    /// A safe constructor invariant for the canonical timestamp was violated.
+    #[error("operational snapshot generated_at is invalid")]
+    InvalidGeneratedAt,
+    /// The fixed-schema output exceeded its compile-time safety ceiling.
+    #[error("operational snapshot export exceeds {MAX_OPENMETRICS_EXPORT_BYTES} bytes")]
+    OutputTooLarge,
+    /// Writing to the in-memory string unexpectedly failed.
+    #[error("operational snapshot formatting failed")]
+    Formatting,
 }
 
 /// Fixed claim-truth dimensions.
@@ -197,6 +239,334 @@ impl OperationalSnapshot {
     pub fn observe_unauthorized_attempt(&mut self) {
         increment(&mut self.unauthorized_attempts);
     }
+
+    /// Validate cross-projection invariants before telemetry export.
+    ///
+    /// Claim truth and finality are recorded by the same operation, so their
+    /// totals must agree. Dead-letter state has only one authoritative source,
+    /// [`JobCounters::dead_letter_count`], and therefore needs no mirror check.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MetricsExportError`] if a sum overflows or the claim and
+    /// finality projections do not describe the same number of claims.
+    pub fn validate_metrics(&self) -> Result<(), MetricsExportError> {
+        let claims = checked_sum(
+            "claims",
+            &[
+                self.claims.true_count,
+                self.claims.false_count,
+                self.claims.unresolved_count,
+            ],
+        )?;
+        let finality = checked_sum(
+            "finality",
+            &[
+                self.finality.none_count,
+                self.finality.provisional_count,
+                self.finality.disputed_count,
+                self.finality.final_count,
+            ],
+        )?;
+        if claims != finality {
+            return Err(MetricsExportError::ClaimFinalityMismatch { claims, finality });
+        }
+        Ok(())
+    }
+
+    /// Render one deterministic, fixed-cardinality `OpenMetrics` 1.0 document.
+    ///
+    /// Metric names, help text, and types are compile-time constants. Samples
+    /// have no labels, and the only rendered values are validated integers.
+    /// Consequently claim IDs, candidate IDs, wallet/signer identifiers,
+    /// filesystem paths, and raw errors cannot enter this output.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MetricsExportError`] if snapshot validation, timestamp
+    /// conversion, formatting, or the fixed output-size ceiling fails.
+    pub fn to_openmetrics(&self) -> Result<String, MetricsExportError> {
+        self.validate_metrics()?;
+        let generated_at = self
+            .generated_at
+            .to_datetime()
+            .map_err(|_| MetricsExportError::InvalidGeneratedAt)?
+            .unix_timestamp();
+        let mut output = String::with_capacity(8 * 1024);
+        let metrics = projection_metrics(self, generated_at)
+            .into_iter()
+            .chain(verification_metrics(self))
+            .chain(job_metrics(self))
+            .chain(settlement_metrics(self))
+            .chain(misc_metrics(self));
+        for item in metrics {
+            item.write_to(&mut output)?;
+        }
+        output.push_str("# EOF\n");
+        if output.len() > MAX_OPENMETRICS_EXPORT_BYTES {
+            return Err(MetricsExportError::OutputTooLarge);
+        }
+        Ok(output)
+    }
+}
+
+fn projection_metrics(snapshot: &OperationalSnapshot, generated_at: i64) -> [FixedMetric; 8] {
+    [
+        metric(
+            "hsai_outcomes_snapshot_generated_at_seconds",
+            "Unix time when this operational snapshot was generated.",
+            MetricType::Gauge,
+            generated_at,
+        ),
+        gauge(
+            "hsai_outcomes_claims_true",
+            "Claims currently projected as true.",
+            snapshot.claims.true_count,
+        ),
+        gauge(
+            "hsai_outcomes_claims_false",
+            "Claims currently projected as false.",
+            snapshot.claims.false_count,
+        ),
+        gauge(
+            "hsai_outcomes_claims_unresolved",
+            "Claims currently projected as unresolved.",
+            snapshot.claims.unresolved_count,
+        ),
+        gauge(
+            "hsai_outcomes_finality_none",
+            "Claims currently having no resolution proposal.",
+            snapshot.finality.none_count,
+        ),
+        gauge(
+            "hsai_outcomes_finality_provisional",
+            "Claims currently having provisional resolution.",
+            snapshot.finality.provisional_count,
+        ),
+        gauge(
+            "hsai_outcomes_finality_disputed",
+            "Claims currently having disputed resolution.",
+            snapshot.finality.disputed_count,
+        ),
+        gauge(
+            "hsai_outcomes_finality_final",
+            "Claims currently having final resolution.",
+            snapshot.finality.final_count,
+        ),
+    ]
+}
+
+fn verification_metrics(snapshot: &OperationalSnapshot) -> [FixedMetric; 4] {
+    [
+        counter(
+            "hsai_outcomes_verifications_pass",
+            "hsai_outcomes_verifications_pass_total",
+            "Normalized verifier pass outcomes.",
+            snapshot.verification.pass_count,
+        ),
+        counter(
+            "hsai_outcomes_verifications_fail",
+            "hsai_outcomes_verifications_fail_total",
+            "Normalized verifier fail outcomes.",
+            snapshot.verification.fail_count,
+        ),
+        counter(
+            "hsai_outcomes_verifications_inconclusive",
+            "hsai_outcomes_verifications_inconclusive_total",
+            "Normalized verifier inconclusive outcomes.",
+            snapshot.verification.inconclusive_count,
+        ),
+        counter(
+            "hsai_outcomes_verifications_error",
+            "hsai_outcomes_verifications_error_total",
+            "Normalized verifier error outcomes.",
+            snapshot.verification.error_count,
+        ),
+    ]
+}
+
+fn job_metrics(snapshot: &OperationalSnapshot) -> [FixedMetric; 5] {
+    [
+        gauge(
+            "hsai_outcomes_jobs_queued",
+            "Durable jobs currently queued.",
+            snapshot.jobs.queued_count,
+        ),
+        gauge(
+            "hsai_outcomes_jobs_running",
+            "Durable jobs currently running.",
+            snapshot.jobs.running_count,
+        ),
+        gauge(
+            "hsai_outcomes_jobs_retry_wait",
+            "Durable jobs currently waiting for retry.",
+            snapshot.jobs.retry_wait_count,
+        ),
+        gauge(
+            "hsai_outcomes_jobs_completed",
+            "Durable jobs currently completed.",
+            snapshot.jobs.completed_count,
+        ),
+        gauge(
+            "hsai_outcomes_jobs_dead_letter",
+            "Durable jobs currently quarantined as dead letters.",
+            snapshot.jobs.dead_letter_count,
+        ),
+    ]
+}
+
+fn settlement_metrics(snapshot: &OperationalSnapshot) -> [FixedMetric; 9] {
+    [
+        gauge(
+            "hsai_outcomes_settlement_unbound",
+            "Settlements currently unbound.",
+            snapshot.settlement.unbound_count,
+        ),
+        gauge(
+            "hsai_outcomes_settlement_bound",
+            "Settlements currently bound.",
+            snapshot.settlement.bound_count,
+        ),
+        gauge(
+            "hsai_outcomes_settlement_not_ready",
+            "Settlements currently blocked by preflight.",
+            snapshot.settlement.not_ready_count,
+        ),
+        gauge(
+            "hsai_outcomes_settlement_ready",
+            "Settlements currently ready.",
+            snapshot.settlement.ready_count,
+        ),
+        gauge(
+            "hsai_outcomes_settlement_intent_built",
+            "Settlements currently having a persisted unsigned intent.",
+            snapshot.settlement.intent_built_count,
+        ),
+        gauge(
+            "hsai_outcomes_settlement_submitted",
+            "Settlements currently submitted.",
+            snapshot.settlement.submitted_count,
+        ),
+        gauge(
+            "hsai_outcomes_settlement_confirmed",
+            "Settlements currently confirmed.",
+            snapshot.settlement.confirmed_count,
+        ),
+        gauge(
+            "hsai_outcomes_settlement_reconciliation_failed",
+            "Settlements currently having failed or ambiguous reconciliation.",
+            snapshot.settlement.reconciliation_failed_count,
+        ),
+        gauge(
+            "hsai_outcomes_settlement_paused",
+            "Settlements currently paused by an operator.",
+            snapshot.settlement.paused_count,
+        ),
+    ]
+}
+
+fn misc_metrics(snapshot: &OperationalSnapshot) -> [FixedMetric; 2] {
+    [
+        gauge(
+            "hsai_outcomes_outbox_backlog",
+            "Current transactional outbox backlog.",
+            snapshot.outbox_backlog,
+        ),
+        counter(
+            "hsai_outcomes_unauthorized_attempts",
+            "hsai_outcomes_unauthorized_attempts_total",
+            "Denied operator or API requests.",
+            snapshot.unauthorized_attempts,
+        ),
+    ]
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MetricType {
+    Gauge,
+    Counter,
+}
+
+impl MetricType {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Gauge => "gauge",
+            Self::Counter => "counter",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FixedMetric {
+    family_name: &'static str,
+    sample_name: &'static str,
+    help: &'static str,
+    metric_type: MetricType,
+    value: i128,
+}
+
+impl FixedMetric {
+    fn write_to(self, output: &mut String) -> Result<(), MetricsExportError> {
+        writeln!(output, "# HELP {} {}", self.family_name, self.help)
+            .map_err(|_| MetricsExportError::Formatting)?;
+        writeln!(
+            output,
+            "# TYPE {} {}",
+            self.family_name,
+            self.metric_type.as_str()
+        )
+        .map_err(|_| MetricsExportError::Formatting)?;
+        writeln!(output, "{} {}", self.sample_name, self.value)
+            .map_err(|_| MetricsExportError::Formatting)
+    }
+}
+
+const fn metric(
+    name: &'static str,
+    help: &'static str,
+    metric_type: MetricType,
+    value: i64,
+) -> FixedMetric {
+    FixedMetric {
+        family_name: name,
+        sample_name: name,
+        help,
+        metric_type,
+        value: value as i128,
+    }
+}
+
+const fn gauge(name: &'static str, help: &'static str, value: u64) -> FixedMetric {
+    FixedMetric {
+        family_name: name,
+        sample_name: name,
+        help,
+        metric_type: MetricType::Gauge,
+        value: value as i128,
+    }
+}
+
+const fn counter(
+    family_name: &'static str,
+    sample_name: &'static str,
+    help: &'static str,
+    value: u64,
+) -> FixedMetric {
+    FixedMetric {
+        family_name,
+        sample_name,
+        help,
+        metric_type: MetricType::Counter,
+        value: value as i128,
+    }
+}
+
+fn checked_sum(group: &'static str, values: &[u64]) -> Result<u64, MetricsExportError> {
+    values.iter().try_fold(0_u64, |total, value| {
+        total
+            .checked_add(*value)
+            .ok_or(MetricsExportError::CounterOverflow { group })
+    })
 }
 
 fn increment(value: &mut u64) {
@@ -443,5 +813,206 @@ mod tests {
             assert!(!json.contains(prohibited));
         }
         Ok(())
+    }
+
+    #[test]
+    fn contract_openmetrics_export_matches_bounded_golden_schema()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut snapshot = OperationalSnapshot::new(timestamp("2026-07-11T01:00:00Z")?);
+        snapshot.claims = ClaimCounters {
+            true_count: 1,
+            false_count: 2,
+            unresolved_count: 3,
+        };
+        snapshot.finality = FinalityCounters {
+            none_count: 1,
+            provisional_count: 1,
+            disputed_count: 1,
+            final_count: 3,
+        };
+        snapshot.verification = VerificationCounters {
+            pass_count: 4,
+            fail_count: 5,
+            inconclusive_count: 6,
+            error_count: 7,
+        };
+        snapshot.jobs = JobCounters {
+            queued_count: 8,
+            running_count: 9,
+            retry_wait_count: 10,
+            completed_count: 11,
+            dead_letter_count: 12,
+        };
+        snapshot.settlement = SettlementCounters {
+            unbound_count: 13,
+            bound_count: 14,
+            not_ready_count: 15,
+            ready_count: 16,
+            intent_built_count: 17,
+            submitted_count: 18,
+            confirmed_count: 19,
+            reconciliation_failed_count: 20,
+            paused_count: 21,
+        };
+        snapshot.outbox_backlog = 22;
+        snapshot.unauthorized_attempts = 23;
+
+        let rendered = snapshot.to_openmetrics()?;
+        let parsed = parse_openmetrics_bounded(&rendered, MAX_OPENMETRICS_EXPORT_BYTES, 28)?;
+        let golden = [
+            (
+                "hsai_outcomes_snapshot_generated_at_seconds",
+                "gauge",
+                1_783_731_600,
+            ),
+            ("hsai_outcomes_claims_true", "gauge", 1),
+            ("hsai_outcomes_claims_false", "gauge", 2),
+            ("hsai_outcomes_claims_unresolved", "gauge", 3),
+            ("hsai_outcomes_finality_none", "gauge", 1),
+            ("hsai_outcomes_finality_provisional", "gauge", 1),
+            ("hsai_outcomes_finality_disputed", "gauge", 1),
+            ("hsai_outcomes_finality_final", "gauge", 3),
+            ("hsai_outcomes_verifications_pass_total", "counter", 4),
+            ("hsai_outcomes_verifications_fail_total", "counter", 5),
+            (
+                "hsai_outcomes_verifications_inconclusive_total",
+                "counter",
+                6,
+            ),
+            ("hsai_outcomes_verifications_error_total", "counter", 7),
+            ("hsai_outcomes_jobs_queued", "gauge", 8),
+            ("hsai_outcomes_jobs_running", "gauge", 9),
+            ("hsai_outcomes_jobs_retry_wait", "gauge", 10),
+            ("hsai_outcomes_jobs_completed", "gauge", 11),
+            ("hsai_outcomes_jobs_dead_letter", "gauge", 12),
+            ("hsai_outcomes_settlement_unbound", "gauge", 13),
+            ("hsai_outcomes_settlement_bound", "gauge", 14),
+            ("hsai_outcomes_settlement_not_ready", "gauge", 15),
+            ("hsai_outcomes_settlement_ready", "gauge", 16),
+            ("hsai_outcomes_settlement_intent_built", "gauge", 17),
+            ("hsai_outcomes_settlement_submitted", "gauge", 18),
+            ("hsai_outcomes_settlement_confirmed", "gauge", 19),
+            (
+                "hsai_outcomes_settlement_reconciliation_failed",
+                "gauge",
+                20,
+            ),
+            ("hsai_outcomes_settlement_paused", "gauge", 21),
+            ("hsai_outcomes_outbox_backlog", "gauge", 22),
+            ("hsai_outcomes_unauthorized_attempts_total", "counter", 23),
+        ];
+        assert_eq!(parsed, golden);
+        assert_eq!(
+            rendered.matches("hsai_outcomes_jobs_dead_letter ").count(),
+            3
+        );
+        assert!(rendered.ends_with("# EOF\n"));
+        assert!(rendered.len() <= MAX_OPENMETRICS_EXPORT_BYTES);
+        Ok(())
+    }
+
+    #[test]
+    fn contract_openmetrics_rejects_invalid_projection_and_overflow()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut mismatch = OperationalSnapshot::new(timestamp("2026-07-11T01:00:00Z")?);
+        mismatch.claims.true_count = 1;
+        assert_eq!(
+            mismatch.to_openmetrics(),
+            Err(MetricsExportError::ClaimFinalityMismatch {
+                claims: 1,
+                finality: 0,
+            })
+        );
+
+        let mut overflow = OperationalSnapshot::new(timestamp("2026-07-11T01:00:00Z")?);
+        overflow.claims.true_count = u64::MAX;
+        overflow.claims.false_count = 1;
+        assert_eq!(
+            overflow.to_openmetrics(),
+            Err(MetricsExportError::CounterOverflow { group: "claims" })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn contract_openmetrics_cannot_render_sensitive_or_injected_content()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let hostile = [
+            "claim_SECRET\ninjected_claim_metric 1",
+            "candidate_SECRET{label=\"x\"}",
+            "wallet_SECRET",
+            "signer_SECRET",
+            "/private/path_SECRET",
+            "raw_error_SECRET",
+        ];
+        let mut hostile_job = job();
+        hostile_job.job_id = hostile[0].to_owned();
+        hostile_job.job_type = hostile[1].to_owned();
+        hostile_job.idempotency_key = hostile[2].to_owned();
+        hostile_job.lease_owner = Some(hostile[3].to_owned());
+        hostile_job.last_error_code = Some(format!("{}:{}", hostile[4], hostile[5]));
+        hostile_job.status = JobStatus::DeadLetter;
+
+        let mut snapshot = OperationalSnapshot::new(timestamp("2026-07-11T01:00:00Z")?);
+        snapshot.observe_job(hostile_job.status);
+        let rendered = snapshot.to_openmetrics()?;
+        for value in hostile {
+            assert!(!rendered.contains(value));
+        }
+        assert!(!rendered.contains('{'));
+        assert!(!rendered.contains('"'));
+        assert!(!rendered.contains("injected_claim_metric"));
+        Ok(())
+    }
+
+    fn parse_openmetrics_bounded(
+        input: &str,
+        max_bytes: usize,
+        max_metrics: usize,
+    ) -> Result<Vec<(&str, &str, i128)>, &'static str> {
+        if input.len() > max_bytes {
+            return Err("input exceeds byte ceiling");
+        }
+        let mut lines = input.lines();
+        let mut parsed = Vec::with_capacity(max_metrics);
+        loop {
+            let line = lines.next().ok_or("missing EOF")?;
+            if line == "# EOF" {
+                if lines.next().is_some() {
+                    return Err("content after EOF");
+                }
+                return Ok(parsed);
+            }
+            if parsed.len() >= max_metrics {
+                return Err("metric count exceeds ceiling");
+            }
+            let help = line.strip_prefix("# HELP ").ok_or("missing HELP")?;
+            let (help_family, help_text) = help.split_once(' ').ok_or("malformed HELP")?;
+            if help_text.is_empty() || help_family.contains(['{', '}', '"', '\\']) {
+                return Err("unsafe HELP");
+            }
+            let type_line = lines.next().ok_or("missing TYPE")?;
+            let metric_type = type_line.strip_prefix("# TYPE ").ok_or("malformed TYPE")?;
+            let (type_family, metric_type) = metric_type.split_once(' ').ok_or("malformed TYPE")?;
+            if help_family != type_family || !matches!(metric_type, "gauge" | "counter") {
+                return Err("metric family mismatch");
+            }
+            let sample = lines.next().ok_or("missing sample")?;
+            let (sample_name, value) = sample.split_once(' ').ok_or("malformed sample")?;
+            if sample_name.contains(['{', '}', '"', '\\']) || value.contains(' ') {
+                return Err("unsafe sample");
+            }
+            if metric_type == "gauge" && sample_name != help_family {
+                return Err("gauge sample name mismatch");
+            }
+            if metric_type == "counter" && sample_name.strip_suffix("_total") != Some(help_family) {
+                return Err("counter sample name mismatch");
+            }
+            let value = value.parse().map_err(|_| "non-integer sample")?;
+            if parsed.iter().any(|(name, _, _)| *name == sample_name) {
+                return Err("duplicate sample");
+            }
+            parsed.push((sample_name, metric_type, value));
+        }
     }
 }

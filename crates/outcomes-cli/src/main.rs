@@ -6,6 +6,10 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use hyperliquid_hip4::{Hip4ReadOnlyBackend, decode_asset_id, encode_asset_ids};
 use outcomes_application::{LocalScenario, run_local_scenario};
 use outcomes_blobstore::FileBlobStore;
+use outcomes_corpus::{
+    LocalMaterializationLimits, LocalMaterializationRequest, bundled_corpus_profiles,
+    materialize_pinned_local_root,
+};
 use outcomes_domain::{
     ClaimSpecDraftV1, ClaimSpecV1, MarketBindingV1, OutcomeEvidenceBundleV1,
     ReconciliationResultV1, ResolutionRecordV1, SettlementNetwork, UnsignedSettlementIntentV1,
@@ -16,6 +20,7 @@ use outcomes_settlement::{CapabilityMatrix, build_intent, preflight};
 use serde_json::{Value, json};
 
 const CAPABILITIES: &str = include_str!("../../../config/adapter-capabilities.json");
+const CORPUS_PROFILES: &str = include_str!("../../../config/corpus-profiles.json");
 
 #[derive(Debug, Parser)]
 #[command(name = "hsai", version, about = "HSAI verifiable outcome protocol")]
@@ -50,6 +55,8 @@ enum OutcomesCommand {
     Hip4(Hip4Args),
     /// Safe artifact-driven settlement preparation and inspection.
     Settlement(SettlementArgs),
+    /// Pinned corpus profile inspection and local materialization.
+    Corpus(CorpusArgs),
 }
 
 #[derive(Debug, Args)]
@@ -202,6 +209,37 @@ struct SettlementInputArgs {
     capabilities: PathBuf,
 }
 
+#[derive(Debug, Args)]
+struct CorpusArgs {
+    #[command(subcommand)]
+    command: CorpusCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum CorpusCommand {
+    /// Print the checked-in immutable corpus profile catalog.
+    Profiles,
+    /// Materialize safe files and inspect special metadata from a pinned checkout.
+    MaterializeLocal {
+        #[arg(long)]
+        profile: String,
+        #[arg(long)]
+        checkout_root: PathBuf,
+        #[arg(long)]
+        materialization_root: String,
+        #[arg(long)]
+        expected_commit: String,
+        #[arg(long)]
+        observed_commit: String,
+        #[arg(long, default_value_t = 10_000)]
+        max_file_count: usize,
+        #[arg(long, default_value_t = 16_777_216)]
+        max_file_bytes: u64,
+        #[arg(long, default_value_t = 268_435_456)]
+        max_total_bytes: u64,
+    },
+}
+
 fn main() -> ExitCode {
     match run(Cli::parse()) {
         Ok(value) => match serde_json::to_string_pretty(&value) {
@@ -224,7 +262,46 @@ fn run(cli: Cli) -> Result<Value, CliError> {
             OutcomesCommand::Demo(demo) => run_demo(demo),
             OutcomesCommand::Hip4(hip4) => run_hip4(hip4),
             OutcomesCommand::Settlement(settlement) => run_settlement(settlement),
+            OutcomesCommand::Corpus(corpus) => run_corpus(corpus),
         },
+    }
+}
+
+fn run_corpus(args: CorpusArgs) -> Result<Value, CliError> {
+    match args.command {
+        CorpusCommand::Profiles => {
+            serde_json::from_str(CORPUS_PROFILES).map_err(CliError::internal)
+        }
+        CorpusCommand::MaterializeLocal {
+            profile,
+            checkout_root,
+            materialization_root,
+            expected_commit,
+            observed_commit,
+            max_file_count,
+            max_file_bytes,
+            max_total_bytes,
+        } => {
+            let catalog = bundled_corpus_profiles()
+                .map_err(|error| CliError::validation(&error.to_string()))?;
+            let manifest = materialize_pinned_local_root(
+                &catalog,
+                &LocalMaterializationRequest {
+                    profile_id: &profile,
+                    checkout_root: &checkout_root,
+                    materialization_root: &materialization_root,
+                    expected_commit: &expected_commit,
+                    observed_checkout_commit: &observed_commit,
+                    limits: LocalMaterializationLimits {
+                        max_file_count,
+                        max_file_bytes,
+                        max_total_bytes,
+                    },
+                },
+            )
+            .map_err(|error| CliError::validation(&error.to_string()))?;
+            serde_json::to_value(manifest).map_err(CliError::internal)
+        }
     }
 }
 
@@ -595,6 +672,55 @@ mod tests {
         .map_err(|error| std::io::Error::other(error.message))?;
         assert_eq!(output["external_effect"], "none");
         assert_eq!(output["dry_run"], true);
+        Ok(())
+    }
+
+    #[test]
+    fn contract_cli_local_corpus_materialization_is_pinned_and_non_executing()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let checkout_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("fixtures/corpora/local-materialization")
+            .canonicalize()?;
+        let commit = "4c5744f55a31a58e03d6118c9dbb1c18e5bbdfa9".to_owned();
+        let output = run(Cli {
+            command: RootCommand::Outcomes(OutcomesArgs {
+                command: OutcomesCommand::Corpus(CorpusArgs {
+                    command: CorpusCommand::MaterializeLocal {
+                        profile: "nyu-ctf-bench".to_owned(),
+                        checkout_root,
+                        materialization_root: "development".to_owned(),
+                        expected_commit: commit.clone(),
+                        observed_commit: commit,
+                        max_file_count: 10,
+                        max_file_bytes: 1_024,
+                        max_total_bytes: 4_096,
+                    },
+                }),
+            }),
+        })
+        .map_err(|error| std::io::Error::other(error.message))?;
+        assert_eq!(
+            output["schema_version"],
+            "hsai.local-corpus-materialization.v2"
+        );
+        assert_eq!(output["executed_files"], false);
+        assert_ne!(output["settlement_readiness"], "SETTLEMENT_READY");
+        assert!(
+            output["files"]
+                .as_array()
+                .is_some_and(|files| !files.is_empty())
+        );
+        assert!(
+            output["special_objects"]
+                .as_array()
+                .is_some_and(|objects| !objects.is_empty())
+        );
+        assert!(
+            output["readiness_blockers"]
+                .as_array()
+                .is_some_and(|blockers| !blockers.is_empty())
+        );
         Ok(())
     }
 }

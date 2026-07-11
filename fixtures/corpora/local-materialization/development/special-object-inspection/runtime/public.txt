@@ -1,0 +1,1 @@
+Recorded inert runtime input. The Dockerfile is metadata only and is never executed.

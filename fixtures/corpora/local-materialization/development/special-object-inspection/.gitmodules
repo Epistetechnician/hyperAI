@@ -1,0 +1,3 @@
+[submodule "recorded-safe-declaration"]
+	path = development/special-object-inspection/vendor/recorded-safe-declaration
+	url = https://example.invalid/recorded/safe-declaration.git

@@ -1412,6 +1412,7 @@ dependencies = [
  "outcomes-api",
  "outcomes-application",
  "outcomes-blobstore",
+ "outcomes-corpus",
  "outcomes-domain",
  "outcomes-evidence",
  "outcomes-settlement",
@@ -1512,7 +1513,9 @@ name = "outcomes-runner"
 version = "0.1.0"
 dependencies = [
  "outcomes-domain",
+ "serde_json",
  "sha2 0.11.0",
+ "tempfile",
  "thiserror",
 ]
 

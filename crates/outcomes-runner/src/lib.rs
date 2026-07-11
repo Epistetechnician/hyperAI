@@ -2,8 +2,13 @@
 
 use std::{
     collections::BTreeMap,
-    process::{Command, Stdio},
-    sync::atomic::{AtomicU64, Ordering},
+    io::{Read, Write},
+    path::{Path, PathBuf},
+    process::{Child, Command, Stdio},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -42,6 +47,12 @@ pub enum RunnerError {
     /// Docker CLI process could not be spawned or polled.
     #[error("OCI process I/O failed: {0}")]
     OciIo(#[from] std::io::Error),
+    /// Docker returned state that does not satisfy the requested control contract.
+    #[error("OCI daemon contract violation: {0}")]
+    OciContract(String),
+    /// An attached output reader could not be joined safely.
+    #[error("OCI output reader terminated unexpectedly")]
+    OciOutputReader,
 }
 
 /// Immutable input to one verification attempt.
@@ -282,13 +293,112 @@ pub struct OciProbeResult {
     pub wall_clock_millis: u64,
 }
 
+/// Candidate path visible inside the isolated verifier container.
+pub const CONTAINER_CANDIDATE_PATH: &str = "/input/candidate";
+/// Expected/verifier input path visible inside the isolated verifier container.
+pub const CONTAINER_VERIFIER_PATH: &str = "/verifier/expected";
+
+/// Public, bounded diagnostic view of one fully digested output stream.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoundedOutputStream {
+    /// SHA-256 over every byte drained before the isolated process terminated.
+    pub digest: Sha256Digest,
+    /// Total drained byte count, including bytes omitted from the preview.
+    pub byte_count: u64,
+    /// Prefix bounded by the runner's configured public diagnostic limit.
+    pub public_preview: Vec<u8>,
+}
+
+/// Bounded diagnostics retained from the most recent Docker verification attempt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DockerPublicOutput {
+    /// Captured standard output metadata and bounded prefix.
+    pub stdout: BoundedOutputStream,
+    /// Captured standard error metadata and bounded prefix.
+    pub stderr: BoundedOutputStream,
+}
+
+/// Docker CLI verifier implementing [`VerificationRunner`].
+///
+/// Candidate and expected verifier bytes are copied into separate read-only
+/// regular files and mounted at fixed paths. The verifier executable itself is
+/// part of the immutable container image.
+#[derive(Debug, Clone)]
+pub struct DockerVerificationRunner {
+    policy: OciSandboxPolicy,
+    verifier_expected_bytes: Vec<u8>,
+    public_preview_bytes_per_stream: usize,
+    docker_binary: PathBuf,
+    last_public_output: Option<DockerPublicOutput>,
+}
+
+impl DockerVerificationRunner {
+    /// Construct a Docker verifier using expected bytes committed by the claim's
+    /// `validator_artifact_digest`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the OCI policy is unsafe, the verifier bytes are
+    /// empty, or the fixed input paths are absent from the structured argv.
+    pub fn new(
+        policy: OciSandboxPolicy,
+        verifier_expected_bytes: Vec<u8>,
+    ) -> Result<Self, RunnerError> {
+        validate_oci_policy(&policy)?;
+        if verifier_expected_bytes.is_empty() {
+            return Err(RunnerError::UnsafeOciPolicy(
+                "verifier expected bytes must be non-empty".to_owned(),
+            ));
+        }
+        if !policy
+            .argv
+            .iter()
+            .any(|value| value == CONTAINER_CANDIDATE_PATH)
+            || !policy
+                .argv
+                .iter()
+                .any(|value| value == CONTAINER_VERIFIER_PATH)
+        {
+            return Err(RunnerError::UnsafeOciPolicy(
+                "verifier argv must reference both fixed read-only input paths".to_owned(),
+            ));
+        }
+        Ok(Self {
+            policy,
+            verifier_expected_bytes,
+            public_preview_bytes_per_stream: 4_096,
+            docker_binary: PathBuf::from("docker"),
+            last_public_output: None,
+        })
+    }
+
+    /// Set the maximum public diagnostic prefix retained per stream.
+    #[must_use]
+    pub fn with_public_preview_limit(mut self, bytes_per_stream: usize) -> Self {
+        self.public_preview_bytes_per_stream = bytes_per_stream;
+        self
+    }
+
+    /// Return bounded diagnostics from the most recent completed attempt.
+    #[must_use]
+    pub fn last_public_output(&self) -> Option<&DockerPublicOutput> {
+        self.last_public_output.as_ref()
+    }
+}
+
 /// Validate the fail-closed OCI policy before any process is spawned.
 ///
 /// # Errors
 ///
 /// Returns an exact unsafe-policy reason when a required control is absent.
 pub fn validate_oci_policy(policy: &OciSandboxPolicy) -> Result<(), RunnerError> {
-    if !policy.image_digest.starts_with("sha256:") || policy.image_digest.len() != 71 {
+    let digest_hex = policy.image_digest.strip_prefix("sha256:");
+    if !digest_hex.is_some_and(|value| {
+        value.len() == 64
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    }) {
         return Err(RunnerError::UnsafeOciPolicy(
             "image must be pinned by a 64-hex SHA-256 digest".to_owned(),
         ));
@@ -313,6 +423,7 @@ pub fn validate_oci_policy(policy: &OciSandboxPolicy) -> Result<(), RunnerError>
             "structured non-empty argv is required".to_owned(),
         ));
     }
+    validate_structured_argv(&policy.argv)?;
     if policy.image_repository.is_empty()
         || policy.image_repository.starts_with('-')
         || policy.image_repository.contains('@')
@@ -331,6 +442,27 @@ pub fn validate_oci_policy(policy: &OciSandboxPolicy) -> Result<(), RunnerError>
     {
         return Err(RunnerError::UnsafeOciPolicy(
             "bounded pids, memory, CPU, scratch, and timeout are required".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_structured_argv(argv: &[String]) -> Result<(), RunnerError> {
+    if argv.iter().any(|argument| argument.contains('\0')) {
+        return Err(RunnerError::UnsafeOciPolicy(
+            "argv contains a NUL byte".to_owned(),
+        ));
+    }
+    let executable = Path::new(&argv[0])
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    if matches!(
+        executable,
+        "sh" | "bash" | "dash" | "ash" | "zsh" | "csh" | "ksh" | "fish"
+    ) {
+        return Err(RunnerError::UnsafeOciPolicy(
+            "shell executables are forbidden; use structured verifier argv".to_owned(),
         ));
     }
     Ok(())
@@ -391,7 +523,9 @@ pub fn docker_create_args(
             ));
         }
         arguments.push("--env".to_owned());
-        arguments.push(name.clone());
+        // An explicit empty value is intentional. Passing only the name would
+        // inherit the Docker CLI process's ambient host value.
+        arguments.push(format!("{name}="));
     }
     arguments.push("--entrypoint".to_owned());
     arguments.push(policy.argv[0].clone());
@@ -401,6 +535,115 @@ pub fn docker_create_args(
     ));
     arguments.extend(policy.argv.iter().skip(1).cloned());
     Ok(arguments)
+}
+
+/// Build exact Docker `create` arguments for a candidate verification run.
+///
+/// The container process starts via `env -i`, which discards both host-provided
+/// values and image-baked environment entries before invoking the structured
+/// verifier argv. Both inputs are read-only regular-file bind mounts.
+///
+/// # Errors
+///
+/// Returns an error for unsafe policy, input paths, environment values, or
+/// container names.
+pub fn docker_verifier_create_args(
+    policy: &OciSandboxPolicy,
+    container_name: &str,
+    candidate_path: &Path,
+    verifier_path: &Path,
+    environment: &BTreeMap<String, String>,
+) -> Result<Vec<String>, RunnerError> {
+    let mut arguments = docker_create_args(policy, container_name)?;
+    validate_mount_source(candidate_path)?;
+    validate_mount_source(verifier_path)?;
+    validate_exact_environment(policy, environment)?;
+
+    // Replace the probe image/command tail with verifier-specific mounts and
+    // the explicit environment-clearing wrapper.
+    let image_index = arguments
+        .iter()
+        .position(|argument| {
+            argument == &format!("{}@{}", policy.image_repository, policy.image_digest)
+        })
+        .ok_or_else(|| RunnerError::OciContract("validated image argument is absent".to_owned()))?;
+    let entrypoint_index = arguments[..image_index]
+        .iter()
+        .rposition(|argument| argument == "--entrypoint")
+        .ok_or_else(|| {
+            RunnerError::OciContract("validated entrypoint argument is absent".to_owned())
+        })?;
+    arguments.truncate(entrypoint_index);
+    arguments.extend([
+        "--pull".to_owned(),
+        "never".to_owned(),
+        "--mount".to_owned(),
+        format!(
+            "type=bind,src={},dst={CONTAINER_CANDIDATE_PATH},readonly",
+            candidate_path.display()
+        ),
+        "--mount".to_owned(),
+        format!(
+            "type=bind,src={},dst={CONTAINER_VERIFIER_PATH},readonly",
+            verifier_path.display()
+        ),
+        "--entrypoint".to_owned(),
+        "/usr/bin/env".to_owned(),
+        format!("{}@{}", policy.image_repository, policy.image_digest),
+        "-i".to_owned(),
+    ]);
+    arguments.extend(
+        environment
+            .iter()
+            .map(|(name, value)| format!("{name}={value}")),
+    );
+    arguments.extend(policy.argv.iter().cloned());
+    Ok(arguments)
+}
+
+fn validate_mount_source(path: &Path) -> Result<(), RunnerError> {
+    if !path.is_absolute()
+        || path
+            .as_os_str()
+            .to_string_lossy()
+            .chars()
+            .any(|character| matches!(character, ',' | '\n' | '\r' | '\0'))
+    {
+        return Err(RunnerError::UnsafeOciPolicy(
+            "mount source must be an absolute path without Docker mount delimiters".to_owned(),
+        ));
+    }
+    let metadata = path.symlink_metadata()?;
+    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+        return Err(RunnerError::UnsafeOciPolicy(
+            "mount source must be a regular non-symlink file".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_exact_environment(
+    policy: &OciSandboxPolicy,
+    environment: &BTreeMap<String, String>,
+) -> Result<(), RunnerError> {
+    let mut expected = policy.environment_allowlist.clone();
+    expected.sort();
+    expected.dedup();
+    let actual = environment.keys().cloned().collect::<Vec<_>>();
+    if actual != expected {
+        return Err(RunnerError::UnsafeOciPolicy(
+            "exact environment keys do not match the policy allowlist".to_owned(),
+        ));
+    }
+    if environment
+        .iter()
+        .any(|(name, value)| name.contains('=') || value.contains('\0'))
+    {
+        return Err(RunnerError::UnsafeOciPolicy(
+            "environment contains unsafe name or value bytes".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 /// Execute an effect-free control-plane probe against the local Docker daemon.
@@ -467,6 +710,801 @@ pub fn run_docker_oci_probe(policy: &OciSandboxPolicy) -> Result<OciProbeResult,
         image_reference: format!("{}@{}", policy.image_repository, policy.image_digest),
         success: status.success(),
         wall_clock_millis: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+    })
+}
+
+impl VerificationRunner for DockerVerificationRunner {
+    // The ordered create/inspect/start/drain/kill/inspect/cleanup sequence is
+    // intentionally visible in one place so cleanup cannot be skipped by a
+    // hidden early return.
+    #[allow(clippy::too_many_lines)]
+    fn execute(&mut self, request: &RunnerRequest<'_>) -> Result<ExecutionManifestV1, RunnerError> {
+        self.last_public_output = None;
+        validate_runner_request(request)?;
+        validate_oci_policy(&self.policy)?;
+        if self.policy.argv != request.claim.verification_policy.argv {
+            return Err(RunnerError::UnsafeOciPolicy(
+                "Docker policy argv differs from the frozen claim argv".to_owned(),
+            ));
+        }
+        if plain_digest(&self.verifier_expected_bytes)
+            != request.claim.verification_policy.validator_artifact_digest
+        {
+            return Err(RunnerError::UnsafeOciPolicy(
+                "verifier expected bytes do not match the frozen validator digest".to_owned(),
+            ));
+        }
+        if self.policy.timeout_millis
+            > request
+                .claim
+                .verification_policy
+                .resource_limits
+                .wall_clock_millis
+        {
+            return Err(RunnerError::UnsafeOciPolicy(
+                "Docker timeout exceeds the frozen claim wall-clock limit".to_owned(),
+            ));
+        }
+
+        let environment = exact_runner_environment(request, &self.policy)?;
+        let candidate_file = read_only_input_file("candidate", request.candidate_bytes)?;
+        let verifier_file = read_only_input_file("verifier", &self.verifier_expected_bytes)?;
+        let sequence = OCI_PROBE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let suffix = &self.policy.image_digest[7..19];
+        let container_name = format!("hsai-verifier-{}-{sequence}-{suffix}", std::process::id());
+        let arguments = docker_verifier_create_args(
+            &self.policy,
+            &container_name,
+            candidate_file.path(),
+            verifier_file.path(),
+            &environment,
+        )?;
+        let create = Command::new(&self.docker_binary)
+            .args(&arguments)
+            .output()?;
+        if !create.status.success() {
+            remove_named_container(&self.docker_binary, &container_name, true);
+            return Err(RunnerError::OciUnavailable(bounded_control_error(
+                &create.stderr,
+            )));
+        }
+        let mut guard = ContainerGuard::new(self.docker_binary.clone(), container_name.clone());
+        let inspection = inspect_container(&self.docker_binary, &container_name)?;
+        let control_facts = validate_daemon_controls(
+            &inspection,
+            &self.policy,
+            candidate_file.path(),
+            verifier_file.path(),
+            &environment,
+        )?;
+
+        let started = Instant::now();
+        let mut child = match Command::new(&self.docker_binary)
+            .args(["start", "--attach", &container_name])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(error) => {
+                guard.cleanup_force()?;
+                return Err(RunnerError::OciIo(error));
+            }
+        };
+        let stdout = child.stdout.take().ok_or_else(|| {
+            RunnerError::OciContract("Docker attach stdout pipe is absent".to_owned())
+        })?;
+        let stderr = child.stderr.take().ok_or_else(|| {
+            RunnerError::OciContract("Docker attach stderr pipe is absent".to_owned())
+        })?;
+        let output_limit = request
+            .claim
+            .verification_policy
+            .resource_limits
+            .output_bytes;
+        let total_output = Arc::new(AtomicU64::new(0));
+        let output_flooded = Arc::new(AtomicBool::new(false));
+        let stdout_reader = spawn_output_reader(
+            stdout,
+            Arc::clone(&total_output),
+            Arc::clone(&output_flooded),
+            output_limit,
+            self.public_preview_bytes_per_stream,
+        );
+        let stderr_reader = spawn_output_reader(
+            stderr,
+            Arc::clone(&total_output),
+            Arc::clone(&output_flooded),
+            output_limit,
+            self.public_preview_bytes_per_stream,
+        );
+
+        let stop = wait_for_attached_process(
+            &mut child,
+            started,
+            Duration::from_millis(self.policy.timeout_millis),
+            &output_flooded,
+        )?;
+        if stop != ProcessStop::Exited {
+            let _ = Command::new(&self.docker_binary)
+                .args(["kill", &container_name])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+            let _ = child.kill();
+            guard.cleanup_force()?;
+            let _ = child.wait();
+        }
+
+        let stdout = join_output_reader(stdout_reader)?;
+        let stderr = join_output_reader(stderr_reader)?;
+        self.last_public_output = Some(DockerPublicOutput {
+            stdout: stdout.clone(),
+            stderr: stderr.clone(),
+        });
+        let elapsed_millis = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+
+        let state = if stop == ProcessStop::Exited {
+            let state = inspect_container_state(&self.docker_binary, &container_name)?;
+            guard.cleanup_force()?;
+            state
+        } else {
+            ContainerState {
+                exit_code: None,
+                oom_killed: false,
+                runtime_error: None,
+            }
+        };
+        build_docker_manifest(
+            request,
+            &self.policy,
+            &container_name,
+            &environment,
+            &control_facts,
+            &stdout,
+            &stderr,
+            &state,
+            stop,
+            elapsed_millis,
+        )
+    }
+}
+
+fn validate_runner_request(request: &RunnerRequest<'_>) -> Result<(), RunnerError> {
+    if request.admission.decision != AdmissionDecisionKind::Allow {
+        return Err(RunnerError::AdmissionBlocked(request.admission.decision));
+    }
+    if request.candidate.artifact_byte_length != request.candidate_bytes.len() as u64
+        || plain_digest(request.candidate_bytes) != request.candidate.artifact_digest
+    {
+        return Err(RunnerError::ArtifactLengthMismatch);
+    }
+    Ok(())
+}
+
+fn exact_runner_environment(
+    request: &RunnerRequest<'_>,
+    policy: &OciSandboxPolicy,
+) -> Result<BTreeMap<String, String>, RunnerError> {
+    let mut environment = BTreeMap::new();
+    for name in &policy.environment_allowlist {
+        let value = match name.as_str() {
+            "LANG" => request.claim.verification_policy.locale.clone(),
+            "TZ" => request.claim.verification_policy.timezone.clone(),
+            _ => {
+                return Err(RunnerError::UnsafeOciPolicy(format!(
+                    "no exact frozen value is defined for environment key {name}"
+                )));
+            }
+        };
+        if environment.insert(name.clone(), value).is_some() {
+            return Err(RunnerError::UnsafeOciPolicy(
+                "environment allowlist contains duplicate keys".to_owned(),
+            ));
+        }
+    }
+    validate_exact_environment(policy, &environment)?;
+    Ok(environment)
+}
+
+fn read_only_input_file(label: &str, bytes: &[u8]) -> Result<tempfile::NamedTempFile, RunnerError> {
+    let mut file = tempfile::Builder::new()
+        .prefix(&format!("hsai-{label}-"))
+        .tempfile()?;
+    file.write_all(bytes)?;
+    file.flush()?;
+    file.as_file().sync_all()?;
+    let mut permissions = file.as_file().metadata()?.permissions();
+    permissions.set_readonly(true);
+    file.as_file().set_permissions(permissions)?;
+    Ok(file)
+}
+
+fn bounded_control_error(bytes: &[u8]) -> String {
+    const LIMIT: usize = 4_096;
+    String::from_utf8_lossy(&bytes[..bytes.len().min(LIMIT)])
+        .trim()
+        .to_owned()
+}
+
+#[derive(Debug)]
+struct ContainerGuard {
+    docker_binary: PathBuf,
+    name: String,
+    active: bool,
+}
+
+impl ContainerGuard {
+    fn new(docker_binary: PathBuf, name: String) -> Self {
+        Self {
+            docker_binary,
+            name,
+            active: true,
+        }
+    }
+
+    fn cleanup_force(&mut self) -> Result<(), RunnerError> {
+        if !self.active {
+            return Ok(());
+        }
+        let cleanup = Command::new(&self.docker_binary)
+            .args(docker_force_remove_args(&self.name))
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()?;
+        if !cleanup.success() {
+            return Err(RunnerError::OciUnavailable(
+                "verifier container cleanup failed".to_owned(),
+            ));
+        }
+        self.active = false;
+        Ok(())
+    }
+}
+
+impl Drop for ContainerGuard {
+    fn drop(&mut self) {
+        if self.active {
+            remove_named_container(&self.docker_binary, &self.name, true);
+        }
+    }
+}
+
+fn remove_named_container(docker_binary: &Path, container_name: &str, force: bool) {
+    let mut command = Command::new(docker_binary);
+    command.arg("rm");
+    if force {
+        command.arg("--force");
+    }
+    let _ = command
+        .arg(container_name)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+fn docker_force_remove_args(container_name: &str) -> [String; 3] {
+    [
+        "rm".to_owned(),
+        "--force".to_owned(),
+        container_name.to_owned(),
+    ]
+}
+
+#[derive(Debug, Clone)]
+struct ContainerInspection {
+    value: serde_json::Value,
+}
+
+fn inspect_container(
+    docker_binary: &Path,
+    container_name: &str,
+) -> Result<ContainerInspection, RunnerError> {
+    let output = Command::new(docker_binary)
+        .args(["inspect", container_name])
+        .output()?;
+    if !output.status.success() {
+        return Err(RunnerError::OciUnavailable(bounded_control_error(
+            &output.stderr,
+        )));
+    }
+    let documents: serde_json::Value = serde_json::from_slice(&output.stdout).map_err(|error| {
+        RunnerError::OciContract(format!("invalid Docker inspect JSON: {error}"))
+    })?;
+    let value = documents
+        .as_array()
+        .and_then(|values| values.first())
+        .cloned()
+        .ok_or_else(|| RunnerError::OciContract("Docker inspect result is empty".to_owned()))?;
+    Ok(ContainerInspection { value })
+}
+
+fn json_path<'a>(
+    value: &'a serde_json::Value,
+    path: &[&str],
+) -> Result<&'a serde_json::Value, RunnerError> {
+    path.iter().try_fold(value, |current, segment| {
+        current.get(*segment).ok_or_else(|| {
+            RunnerError::OciContract(format!("Docker inspect field {} is absent", path.join(".")))
+        })
+    })
+}
+
+fn validate_daemon_controls(
+    inspection: &ContainerInspection,
+    policy: &OciSandboxPolicy,
+    candidate_path: &Path,
+    verifier_path: &Path,
+    environment: &BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>, RunnerError> {
+    let value = &inspection.value;
+    let image_reference = format!("{}@{}", policy.image_repository, policy.image_digest);
+    require_json_string(value, &["Config", "Image"], &image_reference)?;
+    require_json_string(
+        value,
+        &["Config", "User"],
+        &format!("{}:{}", policy.user_id, policy.user_id),
+    )?;
+    require_json_bool(value, &["HostConfig", "ReadonlyRootfs"], true)?;
+    require_json_string(value, &["HostConfig", "NetworkMode"], "none")?;
+    require_json_i64(
+        value,
+        &["HostConfig", "PidsLimit"],
+        i64::from(policy.pids_limit),
+    )?;
+    require_json_i64(
+        value,
+        &["HostConfig", "Memory"],
+        i64::try_from(policy.memory_bytes).map_err(|_| {
+            RunnerError::UnsafeOciPolicy("memory limit exceeds Docker's signed range".to_owned())
+        })?,
+    )?;
+    require_json_i64(
+        value,
+        &["HostConfig", "NanoCpus"],
+        i64::from(policy.cpu_millis) * 1_000_000,
+    )?;
+    require_json_array_contains(value, &["HostConfig", "CapDrop"], "ALL")?;
+    require_json_array_contains(value, &["HostConfig", "SecurityOpt"], "no-new-privileges")?;
+    let tmpfs = json_path(value, &["HostConfig", "Tmpfs"])?;
+    if tmpfs
+        .get("/tmp")
+        .and_then(serde_json::Value::as_str)
+        .is_none()
+    {
+        return Err(RunnerError::OciContract(
+            "Docker did not apply the isolated /tmp tmpfs".to_owned(),
+        ));
+    }
+    let mounts = json_path(value, &["Mounts"])?
+        .as_array()
+        .ok_or_else(|| RunnerError::OciContract("Docker mounts are not an array".to_owned()))?;
+    validate_read_only_file_mount(mounts, candidate_path, CONTAINER_CANDIDATE_PATH)?;
+    validate_read_only_file_mount(mounts, verifier_path, CONTAINER_VERIFIER_PATH)?;
+    if mounts.len() != 2 {
+        return Err(RunnerError::OciContract(
+            "Docker applied mounts beyond the two read-only input files".to_owned(),
+        ));
+    }
+    let expected_command = ["-i".to_owned()]
+        .into_iter()
+        .chain(
+            environment
+                .iter()
+                .map(|(name, value)| format!("{name}={value}")),
+        )
+        .chain(policy.argv.iter().cloned())
+        .collect::<Vec<_>>();
+    require_json_string_array(value, &["Config", "Entrypoint"], &["/usr/bin/env"])?;
+    require_json_string_array_owned(value, &["Config", "Cmd"], &expected_command)?;
+
+    let image_id = json_path(value, &["Image"])?
+        .as_str()
+        .ok_or_else(|| RunnerError::OciContract("Docker image ID is not text".to_owned()))?;
+    Ok(BTreeMap::from([
+        ("container_image_id".to_owned(), image_id.to_owned()),
+        ("image_reference".to_owned(), image_reference),
+        ("network_mode".to_owned(), "none".to_owned()),
+        ("root_filesystem".to_owned(), "read-only".to_owned()),
+        ("capabilities".to_owned(), "drop-all".to_owned()),
+        ("no_new_privileges".to_owned(), "true".to_owned()),
+        ("input_mounts".to_owned(), "two-read-only-files".to_owned()),
+        (
+            "environment_wrapper".to_owned(),
+            "/usr/bin/env -i".to_owned(),
+        ),
+    ]))
+}
+
+fn require_json_string(
+    value: &serde_json::Value,
+    path: &[&str],
+    expected: &str,
+) -> Result<(), RunnerError> {
+    if json_path(value, path)?.as_str() == Some(expected) {
+        Ok(())
+    } else {
+        Err(RunnerError::OciContract(format!(
+            "Docker inspect field {} does not match the requested value",
+            path.join(".")
+        )))
+    }
+}
+
+fn require_json_bool(
+    value: &serde_json::Value,
+    path: &[&str],
+    expected: bool,
+) -> Result<(), RunnerError> {
+    if json_path(value, path)?.as_bool() == Some(expected) {
+        Ok(())
+    } else {
+        Err(RunnerError::OciContract(format!(
+            "Docker inspect field {} does not match the requested value",
+            path.join(".")
+        )))
+    }
+}
+
+fn require_json_i64(
+    value: &serde_json::Value,
+    path: &[&str],
+    expected: i64,
+) -> Result<(), RunnerError> {
+    if json_path(value, path)?.as_i64() == Some(expected) {
+        Ok(())
+    } else {
+        Err(RunnerError::OciContract(format!(
+            "Docker inspect field {} does not match the requested limit",
+            path.join(".")
+        )))
+    }
+}
+
+fn require_json_array_contains(
+    value: &serde_json::Value,
+    path: &[&str],
+    expected: &str,
+) -> Result<(), RunnerError> {
+    let present = json_path(value, path)?.as_array().is_some_and(|values| {
+        values.iter().any(|value| {
+            value.as_str().is_some_and(|actual| {
+                actual == expected
+                    || (expected == "no-new-privileges" && actual.starts_with("no-new-privileges:"))
+            })
+        })
+    });
+    if present {
+        Ok(())
+    } else {
+        Err(RunnerError::OciContract(format!(
+            "Docker inspect field {} omits {expected}",
+            path.join(".")
+        )))
+    }
+}
+
+fn require_json_string_array(
+    value: &serde_json::Value,
+    path: &[&str],
+    expected: &[&str],
+) -> Result<(), RunnerError> {
+    let expected = expected
+        .iter()
+        .map(|value| (*value).to_owned())
+        .collect::<Vec<_>>();
+    require_json_string_array_owned(value, path, &expected)
+}
+
+fn require_json_string_array_owned(
+    value: &serde_json::Value,
+    path: &[&str],
+    expected: &[String],
+) -> Result<(), RunnerError> {
+    let actual = json_path(value, path)?.as_array().and_then(|values| {
+        values
+            .iter()
+            .map(|value| value.as_str().map(str::to_owned))
+            .collect::<Option<Vec<_>>>()
+    });
+    if actual.as_deref() == Some(expected) {
+        Ok(())
+    } else {
+        Err(RunnerError::OciContract(format!(
+            "Docker inspect field {} does not match exact structured argv",
+            path.join(".")
+        )))
+    }
+}
+
+fn validate_read_only_file_mount(
+    mounts: &[serde_json::Value],
+    source: &Path,
+    destination: &str,
+) -> Result<(), RunnerError> {
+    let expected_source = source.to_string_lossy();
+    let matching = mounts.iter().any(|mount| {
+        let actual_source = mount
+            .get("Source")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let source_matches = actual_source == expected_source
+            || actual_source.ends_with(expected_source.trim_start_matches('/'));
+        mount.get("Type").and_then(serde_json::Value::as_str) == Some("bind")
+            && source_matches
+            && mount.get("Destination").and_then(serde_json::Value::as_str) == Some(destination)
+            && mount.get("RW").and_then(serde_json::Value::as_bool) == Some(false)
+    });
+    if matching {
+        Ok(())
+    } else {
+        Err(RunnerError::OciContract(format!(
+            "Docker omitted read-only file mount at {destination}"
+        )))
+    }
+}
+
+type OutputReader = thread::JoinHandle<Result<BoundedOutputStream, std::io::Error>>;
+
+fn spawn_output_reader<R>(
+    reader: R,
+    total_output: Arc<AtomicU64>,
+    output_flooded: Arc<AtomicBool>,
+    output_limit: u64,
+    public_preview_limit: usize,
+) -> OutputReader
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        drain_output_stream(
+            reader,
+            &total_output,
+            &output_flooded,
+            output_limit,
+            public_preview_limit,
+        )
+    })
+}
+
+fn drain_output_stream<R: Read>(
+    mut reader: R,
+    total_output: &AtomicU64,
+    output_flooded: &AtomicBool,
+    output_limit: u64,
+    public_preview_limit: usize,
+) -> Result<BoundedOutputStream, std::io::Error> {
+    let mut hasher = Sha256::new();
+    let mut byte_count = 0_u64;
+    let mut public_preview = Vec::with_capacity(public_preview_limit.min(16_384));
+    let mut buffer = [0_u8; 16_384];
+    loop {
+        let count = reader.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+        byte_count = byte_count.saturating_add(count as u64);
+        let previous = total_output.fetch_add(count as u64, Ordering::Relaxed);
+        if previous.saturating_add(count as u64) > output_limit {
+            output_flooded.store(true, Ordering::Release);
+        }
+        if public_preview.len() < public_preview_limit {
+            let remaining = public_preview_limit - public_preview.len();
+            public_preview.extend_from_slice(&buffer[..count.min(remaining)]);
+        }
+    }
+    Ok(BoundedOutputStream {
+        digest: Sha256Digest::from_bytes(hasher.finalize().into()),
+        byte_count,
+        public_preview,
+    })
+}
+
+fn join_output_reader(reader: OutputReader) -> Result<BoundedOutputStream, RunnerError> {
+    reader
+        .join()
+        .map_err(|_| RunnerError::OciOutputReader)?
+        .map_err(RunnerError::OciIo)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProcessStop {
+    Exited,
+    TimedOut,
+    OutputFlood,
+}
+
+fn wait_for_attached_process(
+    child: &mut Child,
+    started: Instant,
+    timeout: Duration,
+    output_flooded: &AtomicBool,
+) -> Result<ProcessStop, RunnerError> {
+    loop {
+        if child.try_wait()?.is_some() {
+            return Ok(ProcessStop::Exited);
+        }
+        if output_flooded.load(Ordering::Acquire) {
+            return Ok(ProcessStop::OutputFlood);
+        }
+        if started.elapsed() >= timeout {
+            return Ok(ProcessStop::TimedOut);
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ContainerState {
+    exit_code: Option<i32>,
+    oom_killed: bool,
+    runtime_error: Option<String>,
+}
+
+fn inspect_container_state(
+    docker_binary: &Path,
+    container_name: &str,
+) -> Result<ContainerState, RunnerError> {
+    let inspection = inspect_container(docker_binary, container_name)?;
+    let state = json_path(&inspection.value, &["State"])?;
+    let exit_code = state
+        .get("ExitCode")
+        .and_then(serde_json::Value::as_i64)
+        .and_then(|value| i32::try_from(value).ok());
+    let oom_killed = state
+        .get("OOMKilled")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let runtime_error = state
+        .get("Error")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    Ok(ContainerState {
+        exit_code,
+        oom_killed,
+        runtime_error,
+    })
+}
+
+fn normalize_docker_outcome(
+    state: &ContainerState,
+    stop: ProcessStop,
+) -> (ExecutionOutcome, Option<String>) {
+    match stop {
+        ProcessStop::TimedOut => (ExecutionOutcome::Error, Some("TIMEOUT".to_owned())),
+        ProcessStop::OutputFlood => (
+            ExecutionOutcome::Error,
+            Some("OUTPUT_LIMIT_EXCEEDED".to_owned()),
+        ),
+        ProcessStop::Exited if state.oom_killed => {
+            (ExecutionOutcome::Error, Some("OUT_OF_MEMORY".to_owned()))
+        }
+        ProcessStop::Exited if state.runtime_error.is_some() => (
+            ExecutionOutcome::Error,
+            Some("CONTAINER_RUNTIME_ERROR".to_owned()),
+        ),
+        ProcessStop::Exited => match state.exit_code {
+            Some(0) => (ExecutionOutcome::Pass, None),
+            Some(1) => (ExecutionOutcome::Fail, None),
+            Some(_) => (
+                ExecutionOutcome::Error,
+                Some("VERIFIER_EXIT_NON_CONTRACT".to_owned()),
+            ),
+            None => (
+                ExecutionOutcome::Error,
+                Some("MISSING_CONTAINER_EXIT_STATUS".to_owned()),
+            ),
+        },
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_docker_manifest(
+    request: &RunnerRequest<'_>,
+    policy: &OciSandboxPolicy,
+    container_name: &str,
+    environment: &BTreeMap<String, String>,
+    control_facts: &BTreeMap<String, String>,
+    stdout: &BoundedOutputStream,
+    stderr: &BoundedOutputStream,
+    state: &ContainerState,
+    stop: ProcessStop,
+    wall_clock_millis: u64,
+) -> Result<ExecutionManifestV1, RunnerError> {
+    let (normalized_outcome, infrastructure_classification) = normalize_docker_outcome(state, stop);
+    let input_manifest_digest = domain_separated_digest(
+        "hsai.runner-input-manifest.v1",
+        &(
+            request.candidate.artifact_digest,
+            request.candidate.artifact_byte_length,
+            request.claim.verification_policy.validator_artifact_digest,
+            format!("{}@{}", policy.image_repository, policy.image_digest),
+            control_facts,
+        ),
+    )?;
+    let output_manifest_digest = domain_separated_digest(
+        "hsai.runner-output-manifest.v1",
+        &(
+            normalized_outcome,
+            stdout.digest,
+            stdout.byte_count,
+            stderr.digest,
+            stderr.byte_count,
+            state.exit_code,
+            stop == ProcessStop::TimedOut,
+            state.oom_killed,
+            &infrastructure_classification,
+        ),
+    )?;
+    let mut host_compatibility_facts = control_facts.clone();
+    host_compatibility_facts.extend([
+        (
+            "execution_profile".to_owned(),
+            "docker-cli-verifier-v1".to_owned(),
+        ),
+        ("container_removed".to_owned(), "true".to_owned()),
+        ("container_name".to_owned(), container_name.to_owned()),
+        ("stdout_bytes".to_owned(), stdout.byte_count.to_string()),
+        ("stderr_bytes".to_owned(), stderr.byte_count.to_string()),
+    ]);
+    let actual_argv = ["/usr/bin/env".to_owned(), "-i".to_owned()]
+        .into_iter()
+        .chain(
+            environment
+                .iter()
+                .map(|(name, value)| format!("{name}={value}")),
+        )
+        .chain(policy.argv.iter().cloned())
+        .collect();
+    Ok(ExecutionManifestV1 {
+        schema_version: "hsai.execution-manifest.v1".to_owned(),
+        run_id: request.run_id.to_owned(),
+        claim_spec_digest: request.claim.claim_spec_digest().map_err(|error| {
+            RunnerError::UnsafeOciPolicy(format!(
+                "invalid frozen claim supplied to Docker runner: {error}"
+            ))
+        })?,
+        candidate_digest: request.candidate.artifact_digest,
+        admission_decision_digest: request.admission.decision_digest,
+        verifier_digest: request.claim.verification_policy.validator_artifact_digest,
+        environment_digest: request.claim.verification_policy.environment_digest,
+        runner_implementation: "hsai-docker-cli-verifier".to_owned(),
+        runner_build_version: env!("CARGO_PKG_VERSION").to_owned(),
+        host_compatibility_facts,
+        argv: actual_argv,
+        environment: environment.clone(),
+        sandbox_policy_digest: request.admission.sandbox_policy_digest,
+        input_manifest_digest,
+        output_manifest_digest: Some(output_manifest_digest),
+        resource_limits_digest: request.admission.resource_budget_digest,
+        resource_usage: ResourceUsageV1 {
+            cpu_millis: 0,
+            peak_memory_bytes: 0,
+            output_bytes: stdout.byte_count.saturating_add(stderr.byte_count),
+            disk_bytes: 0,
+            wall_clock_millis,
+        },
+        started_at: request.started_at.clone(),
+        ended_at: request.ended_at.clone(),
+        logical_time: request.logical_time.clone(),
+        raw_exit_status: state.exit_code,
+        signal: None,
+        timed_out: stop == ProcessStop::TimedOut,
+        out_of_memory: state.oom_killed,
+        infrastructure_classification,
+        stdout_digest: stdout.digest,
+        stderr_digest: stderr.digest,
+        normalized_outcome,
+        normalization_policy_version: request
+            .claim
+            .verification_policy
+            .output_normalization_version
+            .clone(),
+        determinism_tier: request.claim.verification_policy.determinism_tier,
+        declared_nondeterminism: Vec::new(),
     })
 }
 
@@ -757,6 +1795,307 @@ mod tests {
             arguments.last().map(String::as_str),
             Some("alpine@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
         );
+        Ok(())
+    }
+
+    fn verifier_policy(argv: Vec<String>) -> OciSandboxPolicy {
+        OciSandboxPolicy {
+            image_repository: "alpine".to_owned(),
+            image_digest: format!("sha256:{}", "a".repeat(64)),
+            user_id: 65_534,
+            read_only_root: true,
+            drop_all_capabilities: true,
+            network_disabled: true,
+            host_socket_mounted: false,
+            argv,
+            environment_allowlist: vec!["LANG".to_owned(), "TZ".to_owned()],
+            pids_limit: 16,
+            memory_bytes: 64 * 1024 * 1024,
+            cpu_millis: 250,
+            scratch_bytes: 4 * 1024 * 1024,
+            timeout_millis: 5_000,
+        }
+    }
+
+    #[test]
+    fn contract_verifier_arguments_use_exact_env_and_two_read_only_files()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let candidate_file = read_only_input_file("candidate-test", b"same")?;
+        let verifier_file = read_only_input_file("verifier-test", b"same")?;
+        let policy = verifier_policy(vec![
+            "/usr/bin/cmp".to_owned(),
+            CONTAINER_CANDIDATE_PATH.to_owned(),
+            CONTAINER_VERIFIER_PATH.to_owned(),
+        ]);
+        let environment = BTreeMap::from([
+            ("LANG".to_owned(), "C.UTF-8".to_owned()),
+            ("TZ".to_owned(), "UTC".to_owned()),
+        ]);
+        let arguments = docker_verifier_create_args(
+            &policy,
+            "hsai-verifier-test",
+            candidate_file.path(),
+            verifier_file.path(),
+            &environment,
+        )?;
+        assert!(
+            arguments
+                .windows(2)
+                .any(|values| values == ["--pull", "never"])
+        );
+        assert!(arguments.iter().any(|value| {
+            value.starts_with("type=bind,src=")
+                && value.ends_with(&format!("dst={CONTAINER_CANDIDATE_PATH},readonly"))
+        }));
+        assert!(arguments.iter().any(|value| {
+            value.starts_with("type=bind,src=")
+                && value.ends_with(&format!("dst={CONTAINER_VERIFIER_PATH},readonly"))
+        }));
+        let image_index = arguments
+            .iter()
+            .position(|value| value.starts_with("alpine@sha256:"))
+            .ok_or("missing image")?;
+        assert_eq!(
+            &arguments[image_index + 1..],
+            [
+                "-i",
+                "LANG=C.UTF-8",
+                "TZ=UTC",
+                "/usr/bin/cmp",
+                CONTAINER_CANDIDATE_PATH,
+                CONTAINER_VERIFIER_PATH,
+            ]
+        );
+        assert!(
+            !arguments
+                .iter()
+                .any(|value| value == "/bin/sh" || value == "-c")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn contract_shell_executable_is_rejected() {
+        let policy = verifier_policy(vec![
+            "/bin/sh".to_owned(),
+            "-c".to_owned(),
+            "cmp /input/candidate /verifier/expected".to_owned(),
+        ]);
+        assert!(matches!(
+            validate_oci_policy(&policy),
+            Err(RunnerError::UnsafeOciPolicy(reason)) if reason.contains("shell")
+        ));
+    }
+
+    #[test]
+    fn contract_exit_mapping_preserves_pass_fail_and_infrastructure_errors() {
+        let state = |exit_code, oom_killed, runtime_error| ContainerState {
+            exit_code,
+            oom_killed,
+            runtime_error,
+        };
+        assert_eq!(
+            normalize_docker_outcome(&state(Some(0), false, None), ProcessStop::Exited),
+            (ExecutionOutcome::Pass, None)
+        );
+        assert_eq!(
+            normalize_docker_outcome(&state(Some(1), false, None), ProcessStop::Exited),
+            (ExecutionOutcome::Fail, None)
+        );
+        assert_eq!(
+            normalize_docker_outcome(&state(Some(9), false, None), ProcessStop::Exited),
+            (
+                ExecutionOutcome::Error,
+                Some("VERIFIER_EXIT_NON_CONTRACT".to_owned())
+            )
+        );
+        assert_eq!(
+            normalize_docker_outcome(&state(Some(137), true, None), ProcessStop::Exited),
+            (ExecutionOutcome::Error, Some("OUT_OF_MEMORY".to_owned()))
+        );
+        assert_eq!(
+            normalize_docker_outcome(&state(None, false, None), ProcessStop::TimedOut),
+            (ExecutionOutcome::Error, Some("TIMEOUT".to_owned()))
+        );
+    }
+
+    #[test]
+    fn contract_output_flood_is_fully_hashed_but_publicly_bounded()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let bytes = vec![b'x'; 65_537];
+        let total = AtomicU64::new(0);
+        let flooded = AtomicBool::new(false);
+        let output =
+            drain_output_stream(std::io::Cursor::new(&bytes), &total, &flooded, 1_024, 32)?;
+        assert_eq!(output.byte_count, bytes.len() as u64);
+        assert_eq!(output.digest, plain_digest(&bytes));
+        assert_eq!(output.public_preview, vec![b'x'; 32]);
+        assert!(flooded.load(Ordering::Acquire));
+        assert_eq!(
+            normalize_docker_outcome(
+                &ContainerState {
+                    exit_code: None,
+                    oom_killed: false,
+                    runtime_error: None,
+                },
+                ProcessStop::OutputFlood,
+            ),
+            (
+                ExecutionOutcome::Error,
+                Some("OUTPUT_LIMIT_EXCEEDED".to_owned())
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn contract_cleanup_is_forceful_and_name_scoped() {
+        assert_eq!(
+            docker_force_remove_args("hsai-verifier-123"),
+            ["rm", "--force", "hsai-verifier-123"]
+        );
+    }
+
+    #[test]
+    fn contract_constructor_requires_fixed_input_paths() {
+        let policy = verifier_policy(vec!["/usr/bin/cmp".to_owned()]);
+        assert!(matches!(
+            DockerVerificationRunner::new(policy, b"expected".to_vec()),
+            Err(RunnerError::UnsafeOciPolicy(reason)) if reason.contains("fixed read-only input paths")
+        ));
+    }
+
+    #[test]
+    #[ignore = "requires an explicitly selected preloaded local Alpine image"]
+    fn external_docker_verifier_pass_fail_and_cleanup() -> Result<(), Box<dyn std::error::Error>> {
+        let (Ok(image_repository), Ok(image_digest)) = (
+            std::env::var("HSAI_TEST_OCI_IMAGE_REPOSITORY"),
+            std::env::var("HSAI_TEST_OCI_IMAGE_DIGEST"),
+        ) else {
+            return Ok(());
+        };
+        let expected = b"hsai-docker-verifier-expected\n";
+        let argv = vec![
+            "/usr/bin/cmp".to_owned(),
+            CONTAINER_CANDIDATE_PATH.to_owned(),
+            CONTAINER_VERIFIER_PATH.to_owned(),
+        ];
+        let mut draft = local_demo_claim_draft()?;
+        draft.verification_policy.validator_artifact_digest = plain_digest(expected);
+        draft.verification_policy.argv.clone_from(&argv);
+        draft.verification_policy.resource_limits.wall_clock_millis = 5_000;
+        let claim = draft.freeze()?;
+        let mut policy = verifier_policy(argv);
+        policy.image_repository = image_repository;
+        policy.image_digest = image_digest;
+        let mut runner = DockerVerificationRunner::new(policy, expected.to_vec())?;
+        let started = timestamp("2026-07-10T10:31:00Z")?;
+        let ended = timestamp("2026-07-10T10:31:01Z")?;
+
+        for (index, (candidate_bytes, expected_outcome, expected_exit)) in [
+            (expected.as_slice(), ExecutionOutcome::Pass, 0),
+            (b"different\n".as_slice(), ExecutionOutcome::Fail, 1),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let candidate = candidate(claim.claim_id.clone(), candidate_bytes)?;
+            let admission = evaluate_admission(&claim, &candidate)?;
+            let manifest = runner.execute(&RunnerRequest {
+                claim: &claim,
+                candidate: &candidate,
+                candidate_bytes,
+                admission: &admission,
+                run_id: &format!("docker-run-{index}"),
+                started_at: &started,
+                ended_at: &ended,
+                logical_time: &started,
+            })?;
+            assert_eq!(manifest.normalized_outcome, expected_outcome);
+            assert_eq!(manifest.raw_exit_status, Some(expected_exit));
+            assert_eq!(manifest.runner_implementation, "hsai-docker-cli-verifier");
+            assert_eq!(
+                manifest.host_compatibility_facts["container_removed"],
+                "true"
+            );
+            let name = &manifest.host_compatibility_facts["container_name"];
+            let inspect = Command::new("docker")
+                .args(["inspect", name])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()?;
+            assert!(!inspect.success());
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires an explicitly selected preloaded local Alpine image"]
+    fn external_docker_verifier_timeout_output_flood_and_cleanup()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (Ok(image_repository), Ok(image_digest)) = (
+            std::env::var("HSAI_TEST_OCI_IMAGE_REPOSITORY"),
+            std::env::var("HSAI_TEST_OCI_IMAGE_DIGEST"),
+        ) else {
+            return Ok(());
+        };
+        let expected = b"hsai-docker-verifier-expected\n";
+        let argv = vec![
+            "/usr/bin/yes".to_owned(),
+            CONTAINER_CANDIDATE_PATH.to_owned(),
+            CONTAINER_VERIFIER_PATH.to_owned(),
+        ];
+        for (index, (timeout_millis, output_bytes, classification)) in [
+            (25, 256 * 1024 * 1024, "TIMEOUT"),
+            (5_000, 1_024, "OUTPUT_LIMIT_EXCEEDED"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut draft = local_demo_claim_draft()?;
+            draft.verification_policy.validator_artifact_digest = plain_digest(expected);
+            draft.verification_policy.argv.clone_from(&argv);
+            draft.verification_policy.resource_limits.wall_clock_millis = timeout_millis;
+            draft.verification_policy.resource_limits.output_bytes = output_bytes;
+            let claim = draft.freeze()?;
+            let candidate = candidate(claim.claim_id.clone(), expected)?;
+            let admission = evaluate_admission(&claim, &candidate)?;
+            let mut policy = verifier_policy(argv.clone());
+            policy.image_repository.clone_from(&image_repository);
+            policy.image_digest.clone_from(&image_digest);
+            policy.timeout_millis = timeout_millis;
+            let mut runner = DockerVerificationRunner::new(policy, expected.to_vec())?
+                .with_public_preview_limit(64);
+            let started = timestamp("2026-07-10T10:31:00Z")?;
+            let ended = timestamp("2026-07-10T10:31:01Z")?;
+            let manifest = runner.execute(&RunnerRequest {
+                claim: &claim,
+                candidate: &candidate,
+                candidate_bytes: expected,
+                admission: &admission,
+                run_id: &format!("docker-limit-run-{index}"),
+                started_at: &started,
+                ended_at: &ended,
+                logical_time: &started,
+            })?;
+            assert_eq!(manifest.normalized_outcome, ExecutionOutcome::Error);
+            assert_eq!(
+                manifest.infrastructure_classification.as_deref(),
+                Some(classification)
+            );
+            assert_eq!(manifest.timed_out, classification == "TIMEOUT");
+            let output = runner
+                .last_public_output()
+                .ok_or("missing bounded output")?;
+            assert!(output.stdout.public_preview.len() <= 64);
+            let name = &manifest.host_compatibility_facts["container_name"];
+            let inspect = Command::new("docker")
+                .args(["inspect", name])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()?;
+            assert!(!inspect.success());
+        }
         Ok(())
     }
 

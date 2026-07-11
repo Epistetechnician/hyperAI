@@ -11,10 +11,14 @@ Hyperliquid HIP-4 is the first backend integration.
 Current implementation status: hermetic vertical slice. Frozen claims,
 cursor-aware local observation, structured verification, evidence export,
 attestor quorum, finality, explicit HIP-4 binding, deterministic intents, and
-idempotent mock reconciliation are executable and tested. Safe materialization
-from an already-pinned local corpus checkout is tested, but the system does not
-clone upstream repositories or resolve LFS/submodules/archives/images. No live
-market has been created or settled. Testnet
+idempotent mock reconciliation are executable and tested. A local Docker
+candidate verifier is tested against a preloaded digest-pinned image, including
+bounded output, timeout, cleanup, and the complete TRUE-to-mock-settlement path;
+it is not production sandbox qualification. Safe materialization from an
+already-pinned local corpus checkout and inert special-object inspection are
+tested, but the system does not clone upstream repositories, retrieve LFS or
+submodule objects, extract archives, or materialize images. No live market has
+been created or settled. Testnet
 publishing is `UNSUPPORTED_UNVERIFIED`; mainnet mutation is structurally
 disabled.
 
@@ -31,6 +35,7 @@ pnpm run hsai outcomes demo computational-market --scenario runner-error --artif
 pnpm run hsai outcomes settlement preflight --binding artifacts/true/market-binding.json --resolution artifacts/true/final-resolution.json --metadata fixtures/hip4/outcome-meta.json --capabilities artifacts/true/hip4-capabilities.json
 pnpm run hsai outcomes settlement publish artifacts/true/settlement-intent.json --dry-run
 pnpm run hsai outcomes settlement reconcile artifacts/true/mock-reconciliation.json
+pnpm run hsai outcomes corpus profiles
 ```
 
 The TRUE demo performs one idempotent effect against the in-memory mock only.
@@ -46,6 +51,11 @@ pnpm run verify:contracts
 pnpm run verify:full
 pnpm run lint
 ```
+
+The opt-in local infrastructure gates require explicitly selected local
+dependencies. For Docker, preload the image and export
+`HSAI_TEST_OCI_IMAGE_REPOSITORY` and `HSAI_TEST_OCI_IMAGE_DIGEST`, then run
+`pnpm run verify:infra-oci`. The gate never pulls an image.
 
 See [architecture](docs/outcomes/architecture.md), [HIP-4 status](docs/outcomes/hyperliquid-hip4.md),
 [limitations](docs/outcomes/limitations.md), and the [threat model](docs/threat-model.md).

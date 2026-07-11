@@ -11,6 +11,7 @@ hyperliquid-hip4 = { path = "../hyperliquid-hip4" }
 outcomes-api = { path = "../outcomes-api" }
 outcomes-application = { path = "../outcomes-application" }
 outcomes-blobstore = { path = "../outcomes-blobstore" }
+outcomes-corpus = { path = "../outcomes-corpus" }
 outcomes-domain = { path = "../outcomes-domain" }
 outcomes-evidence = { path = "../outcomes-evidence" }
 outcomes-settlement = { path = "../outcomes-settlement" }

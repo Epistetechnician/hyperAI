@@ -16,21 +16,24 @@ architecture therefore follows the prompt's Rust greenfield branch.
   CAS, idempotency, outbox, concurrency, rollback recovery, settlement restart
   recovery, and SQLite/PostgreSQL migration execution.
 - [x] Phase 3: corpus/source/harness ports, admission, deterministic local
-  runner, fixtures, solver-view isolation, and conformance tests. Docker control
-  enforcement is probed against a pinned image; the full candidate OCI verifier
-  backend remains future production work.
+  runner, fixtures, solver-view isolation, and conformance tests. The local
+  Docker candidate verifier is tested against a preloaded pinned image through
+  PASS/FAIL, timeout, output flood, cleanup, evidence, finality, and mock
+  reconciliation. Production hostile-code sandbox qualification remains future.
 - [x] Phase 4: portable evidence, runtime Ed25519 signatures, distinct quorum,
   existential resolution, disputes, pauses/finality guards, and composed local
   TRUE/FALSE/ERROR scenarios.
 - [x] Phase 5 local surface: machine-readable CLI, public/operator API auth,
   OpenAPI route contract, payload limit, granular mock settlement preflight and
   workflow, artifact-driven settlement CLI, fixed-cardinality operational
-  snapshots, and durable-job state semantics. Production identity remains future.
+  snapshots, bounded unlabeled OpenMetrics rendering, and durable-job state
+  semantics. Production identity and metrics transport remain future.
 - [x] Phase 6 profile/conformance layer: immutable pins, generic-Git overlays,
   rights/readiness records, recorded/manual source boundaries, and pinned NYU
   harness metadata, plus deterministic materialization of regular files from an
-  already-pinned local checkout. Clone/ref, submodule, LFS, archive, and image
-  resolution remain future work.
+  already-pinned local checkout and inert special-object inspection. Clone/ref,
+  submodule/LFS retrieval, archive extraction, and image materialization remain
+  future work.
 - [x] Phase 7: HIP-4 read-only metadata, network-scoped identity, binding, and
   stale-metadata detection.
 - [x] Phase 8: mock settlement, deterministic intents, manual handoff,

@@ -11,8 +11,15 @@ limits, outbox backlog, dead letters, pauses, and denied operator requests.
 `outcomes-worker::OperationalSnapshot` provides fixed-cardinality counters for
 truth, finality, verification outcomes, jobs, settlement lifecycle, outbox
 backlog, and denied operations. It structurally contains no claim/candidate IDs,
-wallets, signer references, paths, or raw errors. Telemetry exporters, tracing,
-alerting, and retention remain production deployment work.
+wallets, signer references, paths, or raw errors. Its dependency-free
+`to_openmetrics` renderer emits a deterministic OpenMetrics 1.0 document with
+fixed names, no labels, integer samples, an output-size ceiling, and a
+claim/finality projection invariant. Job state is represented once; the dead
+letter metric is sourced only from `jobs.dead_letter_count`. State projections
+are gauges, while verifier outcomes and denied requests are cumulative counters.
+The renderer does not provide an HTTP server, scrape authentication, TLS,
+process-wide aggregation, durable counter restoration, tracing, alerting, or
+retention; those transport and deployment controls remain production work.
 
 ## Key rotation
 

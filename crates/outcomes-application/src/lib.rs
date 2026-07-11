@@ -118,12 +118,40 @@ pub enum ApplicationError {
 ///
 /// Returns the typed adapter, runner, evidence, signature, resolution, storage,
 /// timestamp, or serialization failure that stopped the scenario.
-#[allow(clippy::too_many_lines)]
 pub fn run_local_scenario(
     scenario: LocalScenario,
     artifact_root: &Path,
 ) -> Result<ScenarioReport, ApplicationError> {
     let claim = local_demo_claim_draft()?.freeze()?;
+    run_scenario_with_runner(scenario, artifact_root, &claim, None)
+}
+
+/// Run the complete local-fixture TRUE workflow with a supplied verifier.
+///
+/// This composition point keeps Docker or another runner outside the domain,
+/// while preserving the same evidence, quorum, finality, binding, and mock
+/// settlement path used by the hermetic demo.
+///
+/// # Errors
+///
+/// Returns the typed adapter, runner, evidence, resolution, settlement,
+/// storage, timestamp, serialization, or artifact-export failure.
+pub fn run_local_true_scenario_with_runner(
+    claim: &outcomes_domain::ClaimSpecV1,
+    runner: &mut dyn VerificationRunner,
+    artifact_root: &Path,
+) -> Result<ScenarioReport, ApplicationError> {
+    claim.verify_identity()?;
+    run_scenario_with_runner(LocalScenario::True, artifact_root, claim, Some(runner))
+}
+
+#[allow(clippy::too_many_lines)]
+fn run_scenario_with_runner(
+    scenario: LocalScenario,
+    artifact_root: &Path,
+    claim: &outcomes_domain::ClaimSpecV1,
+    mut supplied_runner: Option<&mut dyn VerificationRunner>,
+) -> Result<ScenarioReport, ApplicationError> {
     let corpus = LocalFixtureCorpus::new(timestamp("2026-07-10T10:00:00Z")?)?;
     let snapshot = corpus.snapshot_corpus(corpus.describe_corpus().discovery_ref.as_str())?;
     let _package = corpus.materialize_challenge(snapshot.snapshot_digest, "exact-bytes-v1")?;
@@ -150,18 +178,18 @@ pub fn run_local_scenario(
             "application/octet-stream",
             bytes.to_vec(),
         )?;
-        let admission = evaluate_admission(&claim, &candidate)?;
+        let admission = evaluate_admission(claim, &candidate)?;
         let replay_count = if scenario == LocalScenario::True {
             2
         } else {
             1
         };
-        let mut runner = ScriptedRunner::exact_bytes_fixture();
+        let mut scripted_runner = ScriptedRunner::exact_bytes_fixture();
         for index in 0..replay_count {
             let started = timestamp("2026-07-10T10:31:00Z")?;
             let ended = timestamp("2026-07-10T10:31:01Z")?;
-            executions.push(runner.execute(&RunnerRequest {
-                claim: &claim,
+            let request = RunnerRequest {
+                claim,
                 candidate: &candidate,
                 candidate_bytes: bytes,
                 admission: &admission,
@@ -169,7 +197,12 @@ pub fn run_local_scenario(
                 started_at: &started,
                 ended_at: &ended,
                 logical_time: &started,
-            })?);
+            };
+            executions.push(if let Some(runner) = supplied_runner.as_deref_mut() {
+                runner.execute(&request)?
+            } else {
+                scripted_runner.execute(&request)?
+            });
         }
         candidates.push(candidate);
         admissions.push(admission);
@@ -190,7 +223,7 @@ pub fn run_local_scenario(
     };
     let observation = ledger.snapshot(None, &cutoff, &observed_at)?;
     let evaluation =
-        evaluate_existential_claim(&claim, &cutoff, observation.completeness, &executions, 0)?;
+        evaluate_existential_claim(claim, &cutoff, observation.completeness, &executions, 0)?;
 
     let blob_store = FileBlobStore::new(artifact_root);
     let mut blob_bytes = HashMap::new();
@@ -282,7 +315,7 @@ pub fn run_local_scenario(
     )?;
     let provisional_attestations = sign_pair(
         [&signer_a, &signer_b],
-        &claim,
+        claim,
         &evaluation,
         ResolutionFinality::Provisional,
         policy_digest,
@@ -294,7 +327,7 @@ pub fn run_local_scenario(
         1,
     )?;
     let provisional = propose_resolution(
-        &claim,
+        claim,
         &evaluation,
         bundle.bundle_digest,
         &provisional_attestations,
@@ -303,7 +336,7 @@ pub fn run_local_scenario(
     )?;
     let final_attestations = sign_pair(
         [&signer_a, &signer_b],
-        &claim,
+        claim,
         &evaluation,
         ResolutionFinality::Final,
         policy_digest,
@@ -315,7 +348,7 @@ pub fn run_local_scenario(
         2,
     )?;
     let final_record = finalize_resolution(
-        &claim,
+        claim,
         &provisional,
         &dispute_end,
         false,
@@ -330,7 +363,7 @@ pub fn run_local_scenario(
         )?;
         let capabilities = capability_matrix(SettlementNetwork::Mock, proposed_at.clone());
         let binding = bind_market(
-            &claim,
+            claim,
             &market,
             0,
             1,
@@ -520,6 +553,10 @@ fn timestamp(value: &str) -> Result<UtcTimestamp, outcomes_domain::TimestampErro
 #[cfg(test)]
 mod tests {
     use super::*;
+    use outcomes_runner::{
+        CONTAINER_CANDIDATE_PATH, CONTAINER_VERIFIER_PATH, DockerVerificationRunner,
+        OciSandboxPolicy,
+    };
 
     #[test]
     fn contract_true_false_and_error_scenarios_preserve_boundaries() -> Result<(), ApplicationError>
@@ -557,6 +594,65 @@ mod tests {
                 assert_eq!(report.mock_effect_count, 0);
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires an explicitly selected preloaded local Alpine image"]
+    fn external_docker_true_path_reaches_final_mock_settlement()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (Ok(image_repository), Ok(image_digest)) = (
+            std::env::var("HSAI_TEST_OCI_IMAGE_REPOSITORY"),
+            std::env::var("HSAI_TEST_OCI_IMAGE_DIGEST"),
+        ) else {
+            return Ok(());
+        };
+        let expected = b"hsai-pass-v1";
+        let argv = vec![
+            "/usr/bin/cmp".to_owned(),
+            CONTAINER_CANDIDATE_PATH.to_owned(),
+            CONTAINER_VERIFIER_PATH.to_owned(),
+        ];
+        let mut draft = local_demo_claim_draft()?;
+        draft.verification_policy.validator_artifact_digest =
+            "1d7e49a5b5f6f72ea8a2b87812cea7d69ce0b7a0034094c7dacfebda4ed1c6dd".parse()?;
+        draft.verification_policy.argv.clone_from(&argv);
+        draft.verification_policy.resource_limits.wall_clock_millis = 5_000;
+        let claim = draft.freeze()?;
+        let policy = OciSandboxPolicy {
+            image_repository,
+            image_digest,
+            user_id: 65_534,
+            read_only_root: true,
+            drop_all_capabilities: true,
+            network_disabled: true,
+            host_socket_mounted: false,
+            argv,
+            environment_allowlist: vec!["LANG".to_owned(), "TZ".to_owned()],
+            pids_limit: 16,
+            memory_bytes: 64 * 1024 * 1024,
+            cpu_millis: 250,
+            scratch_bytes: 4 * 1024 * 1024,
+            timeout_millis: 5_000,
+        };
+        let mut runner = DockerVerificationRunner::new(policy, expected.to_vec())?;
+        let directory = tempfile::tempdir()?;
+
+        let report = run_local_true_scenario_with_runner(&claim, &mut runner, directory.path())?;
+
+        assert_eq!(
+            report.execution_outcomes,
+            vec![ExecutionOutcome::Pass, ExecutionOutcome::Pass]
+        );
+        assert_eq!(report.truth, ClaimTruth::True);
+        assert_eq!(report.finality, ResolutionFinality::Final);
+        assert!(report.evidence_verified);
+        assert_eq!(report.mock_effect_count, 1);
+        assert_eq!(
+            report.reconciliation_status,
+            Some(ReconciliationStatus::Confirmed)
+        );
+        assert!(directory.path().join("evidence-bundle.json").is_file());
         Ok(())
     }
 }

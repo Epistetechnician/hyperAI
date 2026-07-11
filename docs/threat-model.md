@@ -8,14 +8,15 @@ finality, and prepares backend settlement. The highest risks are hostile code
 escaping the runner, incomplete or equivocated source observations incorrectly
 supporting FALSE, signer/attestor compromise, evidence loss or privacy leakage,
 and an incorrect or duplicated external settlement effect. The local MVP has
-strong typed fail-closed semantics and mock-effect recovery, but production use
-is blocked by the absence of a production sandbox, live-source completeness,
+strong typed fail-closed semantics, a tested local Docker verifier, and
+mock-effect recovery, but production use is blocked by the absence of an
+adversarially qualified production sandbox, live-source completeness,
 production key/storage controls, and a verified HIP-4 publisher authority.
 
 ## Scope and assumptions
 
 In scope: Rust domain, registry, source/corpus/harness boundaries, scripted
-runner and OCI policy contract, evidence/CAS, SQLite/PostgreSQL migrations,
+runner and local Docker verifier, evidence/CAS, SQLite/PostgreSQL migrations,
 attestation/finality, API/CLI/worker, settlement intent, HIP-4 read-only parser,
 and mock backend. Out of scope: consumer trading, custody, authenticated hosted
 CTF automation, live testnet/mainnet mutation, cloud/IAM configuration, and
@@ -89,8 +90,9 @@ must pause.
 
 1. A source omits a page and an operator tries to finalize FALSE. Cursor and
    completeness requirements leave the claim unresolved.
-2. A candidate exploits the validator or parser to escape. Admission and policy
-   constrain it, but production remains blocked until a real sandbox is deployed.
+2. A candidate exploits the validator or parser to escape. Admission and the
+   tested local Docker controls constrain it, but production remains blocked
+   until the sandbox and trusted host boundary are adversarially qualified.
 3. A malicious validator emits misleading text. Structured typed normalization,
    pinned exit/result maps, and replay agreement prevent substring-based PASS.
 4. One attestor signs conflicting resolutions. Unique signer quorum and retained
@@ -110,15 +112,15 @@ must pause.
 |---|---|---|---|---|
 | TM-001 | Malicious/compromised source; pinned bytes and reliable completeness are assumed | Immutable refs, digests, cursor/pagination model, rights/readiness gating | Gap/equivocation evidence; pause observation and negative finality | Live completeness absent; blocks production settlement |
 | TM-002 | Forged/backdated/withdrawn/duplicate/oversized candidate; source identity/time is assumed | Identity/replacement policy, timestamps, size/type admission, dedupe | Admission and observation records; quarantine and recompute | External timestamp authenticity varies; blocks affected sources |
-| TM-003 | Compromised validator/dependency or candidate RCE/sandbox escape; isolation is assumed | Digest-pinned structured runner policy plus tested Docker non-root/read-only/no-network/capability/resource controls | ERROR classification, manifests, heartbeat/lost-worker handling; quarantine tuple | Control-plane probe is not the full candidate verifier backend; blocks production |
-| TM-004 | Path traversal, symlink/archive/parser exploit or bomb; importer safety is assumed | Solver-view exclusion plus tested pinned-checkout path, symlink, protected-content, race, count, and byte limits | Materialization failure and digest audit; quarantine artifact | Submodule/LFS/archive/image materializers are absent; blocks those inputs |
+| TM-003 | Compromised validator/dependency or candidate RCE/sandbox escape; isolation is assumed | Digest-pinned structured runner plus tested Docker non-root/read-only/no-network/capability/resource controls, exact read-only inputs, bounded output, timeout, and forced cleanup | Typed ERROR classifications, full-stream digests, manifests, heartbeat/lost-worker handling; quarantine tuple | Docker host/daemon are trusted and production sandbox hardening is unqualified; blocks production |
+| TM-004 | Path traversal, symlink/archive/parser exploit or bomb; importer safety is assumed | Solver-view exclusion, tested pinned-checkout path/symlink/protected-content/race/count/byte limits, and inert special-object inspection | Materialization blockers and digest audit; quarantine artifact | Submodule/LFS retrieval, archive extraction, and image materializers are absent; blocks those inputs |
 | TM-005 | Nondeterminism/time/randomness/architecture drift; replay tier is assumed achievable | Frozen environment/time/seed, semantic replay count, typed INCONCLUSIVE/ERROR | Divergent manifests; dispute/pause and new claim if policy changes | Cross-host determinism requires production qualification |
 | TM-006 | Runner/attestor collusion, signer theft/misuse/replay; quorum independence is assumed | 2-of-3 policy support, duplicate signer rejection, key validity times, domain-separated signatures | Signature verification/equivocation records; revoke, rotate, pause | Local dev keys are ephemeral; production KMS/HSM separation blocks readiness |
 | TM-007 | Evidence deletion/substitution/withholding/privacy leakage; durable private storage is assumed | CAS digests, classification, immutable bundle, separate public projection | Standalone verification and availability checks; halt finality, restore and reverify | Filesystem CAS lacks production retention/access controls |
 | TM-008 | Database rollback/audit/outbox tampering; database controls are assumed | Tested PostgreSQL/SQLite immutable triggers, checksummed migrations, transactional event/audit/outbox | Sequence/checksum/outbox reconciliation; restore paired DB/object backup | Production HA and paired restore drills remain unverified |
 | TM-009 | Stale/wrong HIP-4 network/side/outcome/mapping/authority | Checked IDs, explicit mapping, network-scoped binding, metadata digest, authority requirement | Preflight/reconciliation mismatch; invalidate binding and pause | External metadata/API correctness and authority remain external |
 | TM-010 | Duplicate/ambiguous settlement response or API reorganization | Deterministic idempotency, persist-before-submit contract, status-before-retry, mainnet disabled | Receipt/status digest reconciliation; operator pause and escalation | Mock proves logic only; no verified live publisher exists |
-| TM-011 | DoS and expensive-candidate griefing; capacity controls are assumed | Size/resource/time limits, bounded jobs/retries/dead letter, admission budgets | Queue/outcome/lag metrics; throttle/quarantine/raise manual review | Production rate limiter and telemetry backend are future work |
+| TM-011 | DoS and expensive-candidate griefing; capacity controls are assumed | Size/resource/time/output limits, bounded jobs/retries/dead letter, admission budgets | Fixed-cardinality OpenMetrics projection; throttle/quarantine/raise manual review | Production rate limiter, metrics transport/aggregation, and alerting are future work |
 | TM-012 | Operator error, unauthorized action, or pause abuse; IAM is assumed | Role-gated operator API, idempotency/preconditions, structural mainnet refusal | Denied-request audit and pause events; independent review/unpause reason | Local auth model is not production IAM; blocks deployment |
 
 ## Criticality calibration

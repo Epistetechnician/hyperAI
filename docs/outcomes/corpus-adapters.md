@@ -19,6 +19,12 @@ materializer can read deterministic regular-file manifests from an explicitly
 provided absolute checkout whose expected and observed commits match the profile.
 It rejects unsafe paths, symlinks, protected content, filesystem changes, and
 resource-limit overflow without invoking Git, network, or executables. Profiles
-do not yet clone upstream bytes, resolve submodules/LFS/archives/images, or prove
-a runnable verifier. They therefore
+also receive bounded inert inspection of `.gitmodules`, strict Git LFS pointer
+metadata, archive format signatures, and static Dockerfile/Containerfile base
+image references. Unsafe paths or URLs, dynamic or mutable image references,
+missing submodule trees, unverified submodule commits, and unmaterialized LFS
+objects become digest-bound readiness blockers. Archives and container recipes
+are classified only; nothing is extracted or executed. Profiles do not yet
+clone upstream bytes, retrieve submodule/LFS objects, extract archives,
+materialize images, or prove a runnable verifier. They therefore
 remain `EVALUATION_ONLY` or `CATALOG_ONLY` and cannot drive settlement.

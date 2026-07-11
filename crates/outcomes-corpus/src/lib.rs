@@ -158,6 +158,102 @@ pub struct LocalMaterializedFile {
     pub byte_length: u64,
 }
 
+/// Special checkout object that cannot be treated as ordinary runnable bytes.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum SpecialObjectMetadata {
+    /// One declaration parsed from a bounded UTF-8 `.gitmodules` file.
+    GitSubmodule {
+        /// Human-readable name from the section header.
+        name: String,
+        /// Normalized checkout-relative submodule path.
+        path: Option<String>,
+        /// Declared upstream URL, retained as inert text.
+        url: Option<String>,
+    },
+    /// A Git LFS v1 pointer; referenced content was not read.
+    GitLfsPointer {
+        /// Lowercase SHA-256 object identifier from the pointer.
+        oid_sha256: String,
+        /// Declared external object length.
+        declared_size: u64,
+    },
+    /// Archive bytes classified by filename without parsing or extraction.
+    Archive {
+        /// Recognized archive container/compression form.
+        format: ArchiveFormat,
+    },
+    /// Dockerfile/Containerfile base-image declaration retained as inert text.
+    OciImageReference {
+        /// Exact `FROM` reference, without command execution or resolution.
+        reference: String,
+        /// Whether the reference is pinned by a lowercase SHA-256 digest.
+        digest_pinned: bool,
+    },
+}
+
+/// Recognized archive formats. Recognition never authorizes extraction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ArchiveFormat {
+    /// ZIP container.
+    Zip,
+    /// Uncompressed tar container.
+    Tar,
+    /// Gzip-compressed tar container.
+    TarGzip,
+    /// Bzip2-compressed tar container.
+    TarBzip2,
+    /// XZ-compressed tar container.
+    TarXz,
+}
+
+/// Typed reason a special object remains unusable for settlement evaluation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum SpecialObjectBlockerCode {
+    /// Submodule path is absent, unsafe, or not normalized.
+    UnsafeSubmodulePath,
+    /// Submodule URL is not an inert credential-free HTTPS URL.
+    UnsafeSubmoduleUrl,
+    /// Submodule working-tree bytes are absent.
+    SubmoduleObjectMissing,
+    /// Submodule commit identity was not independently verified.
+    SubmoduleCommitUnverified,
+    /// LFS content is external to the pointer and was not materialized.
+    LfsContentNotMaterialized,
+    /// Declared LFS size exceeds the materializer's aggregate byte ceiling.
+    LfsDeclaredSizeExceedsLimit,
+    /// Archive contents were not parsed or extracted.
+    ArchiveNotExtracted,
+    /// Dockerfile or Containerfile was inspected as metadata only.
+    DockerfileMetadataOnly,
+    /// OCI image reference is mutable because it lacks a SHA-256 digest pin.
+    OciReferenceNotDigestPinned,
+}
+
+/// One deterministic special-object inspection record.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpecialObjectInspection {
+    /// Checkout-relative file containing the declaration or special bytes.
+    pub normalized_path: String,
+    /// Typed inert metadata extracted without resolution or execution.
+    pub metadata: SpecialObjectMetadata,
+    /// Exact typed blockers; every record has at least one.
+    pub blockers: Vec<SpecialObjectBlockerCode>,
+}
+
+/// Flattened blocker retained in the top-level manifest for admission checks.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpecialObjectReadinessBlocker {
+    /// File that caused the fail-closed readiness ceiling.
+    pub normalized_path: String,
+    /// Machine-readable blocker code.
+    pub code: SpecialObjectBlockerCode,
+}
+
 /// Deterministic manifest of bytes read from one caller-provided local tree.
 ///
 /// Materialization is an evaluation input only. It does not establish source
@@ -177,6 +273,10 @@ pub struct LocalCorpusMaterialization {
     pub files: Vec<LocalMaterializedFile>,
     /// Aggregate accepted file bytes.
     pub total_bytes: u64,
+    /// Deterministically ordered metadata-only special-object inspections.
+    pub special_objects: Vec<SpecialObjectInspection>,
+    /// Deterministically ordered blockers derived from special objects.
+    pub readiness_blockers: Vec<SpecialObjectReadinessBlocker>,
     /// Digest over the canonical manifest body.
     pub manifest_digest: Sha256Digest,
     /// Catalog ceiling, which is structurally forbidden from settlement-ready.
@@ -193,11 +293,15 @@ struct LocalCorpusMaterializationBody<'a> {
     materialization_root: &'a str,
     files: &'a [LocalMaterializedFile],
     total_bytes: u64,
+    special_objects: &'a [SpecialObjectInspection],
+    readiness_blockers: &'a [SpecialObjectReadinessBlocker],
     settlement_readiness: &'a SettlementReadiness,
     executed_files: bool,
 }
 
-const LOCAL_MATERIALIZATION_SCHEMA_VERSION: &str = "hsai.local-corpus-materialization.v1";
+const LOCAL_MATERIALIZATION_SCHEMA_VERSION: &str = "hsai.local-corpus-materialization.v2";
+const MAX_GITMODULES_BYTES: usize = 64 * 1024;
+const MAX_LFS_POINTER_BYTES: usize = 1024;
 
 /// Machine-readable catalog of reviewed generic-Git manifest profiles.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -368,17 +472,37 @@ pub fn materialize_pinned_local_root(
         });
     }
 
-    let mut files = Vec::new();
-    let mut total_bytes = 0_u64;
-    scan_materialization_directory(
-        &selected_root,
-        &relative_root,
+    let mut scan = LocalMaterializationScan {
+        checkout_root: request.checkout_root,
         profile,
-        request.limits,
-        &mut files,
-        &mut total_bytes,
-    )?;
+        limits: request.limits,
+        files: Vec::new(),
+        total_bytes: 0,
+        special_objects: Vec::new(),
+    };
+    scan_materialization_directory(&selected_root, &relative_root, &mut scan)?;
+    let LocalMaterializationScan {
+        mut files,
+        total_bytes,
+        mut special_objects,
+        ..
+    } = scan;
     files.sort_by(|left, right| left.normalized_path.cmp(&right.normalized_path));
+    special_objects.sort();
+    let mut readiness_blockers = special_objects
+        .iter()
+        .flat_map(|object| {
+            object
+                .blockers
+                .iter()
+                .map(|code| SpecialObjectReadinessBlocker {
+                    normalized_path: object.normalized_path.clone(),
+                    code: *code,
+                })
+        })
+        .collect::<Vec<_>>();
+    readiness_blockers.sort();
+    readiness_blockers.dedup();
     if files.is_empty() {
         return Err(CorpusError::UnsafeMaterializationPath {
             path: request.materialization_root.to_owned(),
@@ -393,10 +517,12 @@ pub fn materialize_pinned_local_root(
         materialization_root: request.materialization_root,
         files: &files,
         total_bytes,
+        special_objects: &special_objects,
+        readiness_blockers: &readiness_blockers,
         settlement_readiness: &profile.readiness,
         executed_files: false,
     };
-    let manifest_digest = domain_separated_digest("hsai.local-corpus-materialization.v1", &body)?;
+    let manifest_digest = domain_separated_digest("hsai.local-corpus-materialization.v2", &body)?;
     Ok(LocalCorpusMaterialization {
         schema_version: LOCAL_MATERIALIZATION_SCHEMA_VERSION.to_owned(),
         profile_id: profile.profile_id.clone(),
@@ -404,6 +530,8 @@ pub fn materialize_pinned_local_root(
         materialization_root: request.materialization_root.to_owned(),
         files,
         total_bytes,
+        special_objects,
+        readiness_blockers,
         manifest_digest,
         settlement_readiness: profile.readiness,
         executed_files: false,
@@ -455,13 +583,19 @@ fn root_is_allowlisted(allowlisted_root: &str, requested_root: &str) -> bool {
 }
 
 #[allow(clippy::too_many_lines)]
+struct LocalMaterializationScan<'a> {
+    checkout_root: &'a Path,
+    profile: &'a CorpusProfile,
+    limits: LocalMaterializationLimits,
+    files: Vec<LocalMaterializedFile>,
+    total_bytes: u64,
+    special_objects: Vec<SpecialObjectInspection>,
+}
+
 fn scan_materialization_directory(
     directory: &Path,
     relative_directory: &Path,
-    profile: &CorpusProfile,
-    limits: LocalMaterializationLimits,
-    files: &mut Vec<LocalMaterializedFile>,
-    total_bytes: &mut u64,
+    scan: &mut LocalMaterializationScan<'_>,
 ) -> Result<(), CorpusError> {
     let read_dir = fs::read_dir(directory).map_err(|source| CorpusError::LocalIo {
         operation: "read directory",
@@ -510,59 +644,16 @@ fn scan_materialization_directory(
         if vcs_control_path(&normalized_path) {
             continue;
         }
-        if protected_materialization_path(profile, &normalized_path) {
+        if protected_materialization_path(scan.profile, &normalized_path) {
             return Err(CorpusError::UnsafeMaterializationPath {
                 path: normalized_path,
                 reason: "protected, secret, solution, or flag path is forbidden".to_owned(),
             });
         }
         if metadata.is_dir() {
-            scan_materialization_directory(
-                &absolute_path,
-                &relative_path,
-                profile,
-                limits,
-                files,
-                total_bytes,
-            )?;
+            scan_materialization_directory(&absolute_path, &relative_path, scan)?;
         } else if metadata.is_file() {
-            if files.len() >= limits.max_file_count {
-                return Err(CorpusError::MaterializationLimitExceeded {
-                    limit: format!("max_file_count={}", limits.max_file_count),
-                    path: normalized_path,
-                });
-            }
-            if metadata.len() > limits.max_file_bytes {
-                return Err(CorpusError::MaterializationLimitExceeded {
-                    limit: format!("max_file_bytes={}", limits.max_file_bytes),
-                    path: normalized_path,
-                });
-            }
-            let next_total = total_bytes.checked_add(metadata.len()).ok_or_else(|| {
-                CorpusError::MaterializationLimitExceeded {
-                    limit: format!("max_total_bytes={}", limits.max_total_bytes),
-                    path: normalized_path.clone(),
-                }
-            })?;
-            if next_total > limits.max_total_bytes {
-                return Err(CorpusError::MaterializationLimitExceeded {
-                    limit: format!("max_total_bytes={}", limits.max_total_bytes),
-                    path: normalized_path,
-                });
-            }
-            let bytes = read_bounded_regular_file(
-                &absolute_path,
-                &metadata,
-                limits.max_file_bytes,
-                &normalized_path,
-            )?;
-            let digest: [u8; 32] = Sha256::digest(&bytes).into();
-            files.push(LocalMaterializedFile {
-                normalized_path,
-                content_digest: Sha256Digest::from_bytes(digest),
-                byte_length: metadata.len(),
-            });
-            *total_bytes = next_total;
+            scan_regular_materialization_file(&absolute_path, normalized_path, &metadata, scan)?;
         } else {
             return Err(CorpusError::UnsafeMaterializationPath {
                 path: normalized_path,
@@ -571,6 +662,410 @@ fn scan_materialization_directory(
         }
     }
     Ok(())
+}
+
+fn scan_regular_materialization_file(
+    absolute_path: &Path,
+    normalized_path: String,
+    metadata: &fs::Metadata,
+    scan: &mut LocalMaterializationScan<'_>,
+) -> Result<(), CorpusError> {
+    if scan.files.len() >= scan.limits.max_file_count {
+        return Err(CorpusError::MaterializationLimitExceeded {
+            limit: format!("max_file_count={}", scan.limits.max_file_count),
+            path: normalized_path,
+        });
+    }
+    if metadata.len() > scan.limits.max_file_bytes {
+        return Err(CorpusError::MaterializationLimitExceeded {
+            limit: format!("max_file_bytes={}", scan.limits.max_file_bytes),
+            path: normalized_path,
+        });
+    }
+    let next_total = scan
+        .total_bytes
+        .checked_add(metadata.len())
+        .ok_or_else(|| CorpusError::MaterializationLimitExceeded {
+            limit: format!("max_total_bytes={}", scan.limits.max_total_bytes),
+            path: normalized_path.clone(),
+        })?;
+    if next_total > scan.limits.max_total_bytes {
+        return Err(CorpusError::MaterializationLimitExceeded {
+            limit: format!("max_total_bytes={}", scan.limits.max_total_bytes),
+            path: normalized_path,
+        });
+    }
+    let bytes = read_bounded_regular_file(
+        absolute_path,
+        metadata,
+        scan.limits.max_file_bytes,
+        &normalized_path,
+    )?;
+    inspect_special_file(
+        scan.checkout_root,
+        &normalized_path,
+        &bytes,
+        scan.limits,
+        &mut scan.special_objects,
+    )?;
+    let digest: [u8; 32] = Sha256::digest(&bytes).into();
+    scan.files.push(LocalMaterializedFile {
+        normalized_path,
+        content_digest: Sha256Digest::from_bytes(digest),
+        byte_length: metadata.len(),
+    });
+    scan.total_bytes = next_total;
+    Ok(())
+}
+
+fn inspect_special_file(
+    checkout_root: &Path,
+    normalized_path: &str,
+    bytes: &[u8],
+    limits: LocalMaterializationLimits,
+    special_objects: &mut Vec<SpecialObjectInspection>,
+) -> Result<(), CorpusError> {
+    let filename = normalized_path
+        .rsplit('/')
+        .next()
+        .unwrap_or(normalized_path);
+    if filename == ".gitmodules" {
+        special_objects.extend(inspect_gitmodules(checkout_root, normalized_path, bytes)?);
+        return Ok(());
+    }
+    if bytes.starts_with(b"version https://git-lfs.github.com/spec/v1") {
+        special_objects.push(inspect_lfs_pointer(normalized_path, bytes, limits)?);
+        return Ok(());
+    }
+    if let Some(format) = archive_format(filename) {
+        special_objects.push(SpecialObjectInspection {
+            normalized_path: normalized_path.to_owned(),
+            metadata: SpecialObjectMetadata::Archive { format },
+            blockers: vec![SpecialObjectBlockerCode::ArchiveNotExtracted],
+        });
+        return Ok(());
+    }
+    if dockerfile_name(filename) {
+        special_objects.extend(inspect_dockerfile(normalized_path, bytes)?);
+    }
+    Ok(())
+}
+
+#[derive(Default)]
+struct ParsedSubmodule {
+    name: String,
+    path: Option<String>,
+    url: Option<String>,
+}
+
+fn inspect_gitmodules(
+    checkout_root: &Path,
+    normalized_path: &str,
+    bytes: &[u8],
+) -> Result<Vec<SpecialObjectInspection>, CorpusError> {
+    if bytes.len() > MAX_GITMODULES_BYTES {
+        return Err(CorpusError::MaterializationLimitExceeded {
+            limit: format!("max_gitmodules_bytes={MAX_GITMODULES_BYTES}"),
+            path: normalized_path.to_owned(),
+        });
+    }
+    let text = std::str::from_utf8(bytes).map_err(|_| CorpusError::UnsafeMaterializationPath {
+        path: normalized_path.to_owned(),
+        reason: ".gitmodules must be valid UTF-8".to_owned(),
+    })?;
+    let mut parsed = Vec::new();
+    let mut current: Option<ParsedSubmodule> = None;
+    for raw_line in text.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+            continue;
+        }
+        if line.starts_with('[') {
+            if let Some(section) = current.take() {
+                parsed.push(section);
+            }
+            let Some(name) = line
+                .strip_prefix("[submodule \"")
+                .and_then(|value| value.strip_suffix("\"]"))
+            else {
+                return Err(CorpusError::UnsafeMaterializationPath {
+                    path: normalized_path.to_owned(),
+                    reason: "unsupported or malformed .gitmodules section".to_owned(),
+                });
+            };
+            if name.is_empty() || name.chars().any(char::is_control) {
+                return Err(CorpusError::UnsafeMaterializationPath {
+                    path: normalized_path.to_owned(),
+                    reason: "submodule name is empty or contains control characters".to_owned(),
+                });
+            }
+            current = Some(ParsedSubmodule {
+                name: name.to_owned(),
+                ..ParsedSubmodule::default()
+            });
+            continue;
+        }
+        let Some(section) = current.as_mut() else {
+            return Err(CorpusError::UnsafeMaterializationPath {
+                path: normalized_path.to_owned(),
+                reason: ".gitmodules key appears outside a submodule section".to_owned(),
+            });
+        };
+        let Some((key, value)) = line.split_once('=') else {
+            return Err(CorpusError::UnsafeMaterializationPath {
+                path: normalized_path.to_owned(),
+                reason: "malformed .gitmodules key/value line".to_owned(),
+            });
+        };
+        let key = key.trim();
+        let value = value.trim();
+        if value.is_empty() || value.chars().any(char::is_control) {
+            return Err(CorpusError::UnsafeMaterializationPath {
+                path: normalized_path.to_owned(),
+                reason: ".gitmodules value is empty or contains control characters".to_owned(),
+            });
+        }
+        match key {
+            "path" if section.path.is_none() => section.path = Some(value.to_owned()),
+            "url" if section.url.is_none() => section.url = Some(value.to_owned()),
+            "branch" | "update" | "ignore" | "shallow" => {}
+            "path" | "url" => {
+                return Err(CorpusError::UnsafeMaterializationPath {
+                    path: normalized_path.to_owned(),
+                    reason: format!("duplicate submodule {key} key"),
+                });
+            }
+            _ => {
+                return Err(CorpusError::UnsafeMaterializationPath {
+                    path: normalized_path.to_owned(),
+                    reason: format!("unsupported .gitmodules key {key}"),
+                });
+            }
+        }
+    }
+    if let Some(section) = current {
+        parsed.push(section);
+    }
+    if parsed.is_empty() {
+        return Err(CorpusError::UnsafeMaterializationPath {
+            path: normalized_path.to_owned(),
+            reason: ".gitmodules contains no submodule declarations".to_owned(),
+        });
+    }
+
+    Ok(parsed
+        .into_iter()
+        .map(|section| submodule_inspection(checkout_root, normalized_path, section))
+        .collect())
+}
+
+fn submodule_inspection(
+    checkout_root: &Path,
+    normalized_path: &str,
+    section: ParsedSubmodule,
+) -> SpecialObjectInspection {
+    let mut blockers = Vec::new();
+    let safe_path = section
+        .path
+        .as_deref()
+        .is_some_and(|path| validate_normalized_relative_path(path, false).is_ok());
+    if !safe_path {
+        blockers.push(SpecialObjectBlockerCode::UnsafeSubmodulePath);
+    }
+    if !section.url.as_deref().is_some_and(safe_submodule_url) {
+        blockers.push(SpecialObjectBlockerCode::UnsafeSubmoduleUrl);
+    }
+    let object_present = section.path.as_deref().is_some_and(|path| {
+        safe_path
+            && fs::symlink_metadata(checkout_root.join(path))
+                .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+    });
+    if !object_present {
+        blockers.push(SpecialObjectBlockerCode::SubmoduleObjectMissing);
+    }
+    blockers.push(SpecialObjectBlockerCode::SubmoduleCommitUnverified);
+    blockers.sort();
+    blockers.dedup();
+    SpecialObjectInspection {
+        normalized_path: normalized_path.to_owned(),
+        metadata: SpecialObjectMetadata::GitSubmodule {
+            name: section.name,
+            path: section.path,
+            url: section.url,
+        },
+        blockers,
+    }
+}
+
+fn safe_submodule_url(url: &str) -> bool {
+    let Some(authority_and_path) = url.strip_prefix("https://") else {
+        return false;
+    };
+    let Some((authority, path)) = authority_and_path.split_once('/') else {
+        return false;
+    };
+    !authority.is_empty()
+        && !path.is_empty()
+        && !authority.contains('@')
+        && !url.contains(['?', '#', '\\'])
+        && !url.chars().any(char::is_whitespace)
+        && !url.split('/').any(|component| component == "..")
+}
+
+fn inspect_lfs_pointer(
+    normalized_path: &str,
+    bytes: &[u8],
+    limits: LocalMaterializationLimits,
+) -> Result<SpecialObjectInspection, CorpusError> {
+    if bytes.len() > MAX_LFS_POINTER_BYTES {
+        return Err(CorpusError::MaterializationLimitExceeded {
+            limit: format!("max_lfs_pointer_bytes={MAX_LFS_POINTER_BYTES}"),
+            path: normalized_path.to_owned(),
+        });
+    }
+    let text = std::str::from_utf8(bytes).map_err(|_| CorpusError::UnsafeMaterializationPath {
+        path: normalized_path.to_owned(),
+        reason: "Git LFS pointer must be valid UTF-8".to_owned(),
+    })?;
+    let lines = text.lines().collect::<Vec<_>>();
+    if lines.len() != 3 || lines[0] != "version https://git-lfs.github.com/spec/v1" {
+        return Err(CorpusError::UnsafeMaterializationPath {
+            path: normalized_path.to_owned(),
+            reason: "unsupported or malformed Git LFS pointer".to_owned(),
+        });
+    }
+    let oid_sha256 = lines[1]
+        .strip_prefix("oid sha256:")
+        .filter(|oid| {
+            oid.len() == 64
+                && oid
+                    .bytes()
+                    .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        })
+        .ok_or_else(|| CorpusError::UnsafeMaterializationPath {
+            path: normalized_path.to_owned(),
+            reason: "Git LFS oid must be lowercase SHA-256".to_owned(),
+        })?
+        .to_owned();
+    let declared_size = lines[2]
+        .strip_prefix("size ")
+        .and_then(|size| size.parse::<u64>().ok())
+        .ok_or_else(|| CorpusError::UnsafeMaterializationPath {
+            path: normalized_path.to_owned(),
+            reason: "Git LFS size must be an unsigned decimal integer".to_owned(),
+        })?;
+    let mut blockers = vec![SpecialObjectBlockerCode::LfsContentNotMaterialized];
+    if declared_size > limits.max_total_bytes {
+        blockers.push(SpecialObjectBlockerCode::LfsDeclaredSizeExceedsLimit);
+    }
+    Ok(SpecialObjectInspection {
+        normalized_path: normalized_path.to_owned(),
+        metadata: SpecialObjectMetadata::GitLfsPointer {
+            oid_sha256,
+            declared_size,
+        },
+        blockers,
+    })
+}
+
+fn archive_format(filename: &str) -> Option<ArchiveFormat> {
+    let lower = filename.to_ascii_lowercase();
+    let reversed_components = lower.rsplit('.').collect::<Vec<_>>();
+    match reversed_components.as_slice() {
+        ["zip", ..] => Some(ArchiveFormat::Zip),
+        ["tar", ..] => Some(ArchiveFormat::Tar),
+        ["tgz", ..] | ["gz", "tar", ..] => Some(ArchiveFormat::TarGzip),
+        ["tbz2", ..] | ["bz2", "tar", ..] => Some(ArchiveFormat::TarBzip2),
+        ["txz", ..] | ["xz", "tar", ..] => Some(ArchiveFormat::TarXz),
+        _ => None,
+    }
+}
+
+fn dockerfile_name(filename: &str) -> bool {
+    let lower = filename.to_ascii_lowercase();
+    matches!(lower.as_str(), "dockerfile" | "containerfile")
+        || lower.starts_with("dockerfile.")
+        || lower.starts_with("containerfile.")
+}
+
+fn inspect_dockerfile(
+    normalized_path: &str,
+    bytes: &[u8],
+) -> Result<Vec<SpecialObjectInspection>, CorpusError> {
+    let text = std::str::from_utf8(bytes).map_err(|_| CorpusError::UnsafeMaterializationPath {
+        path: normalized_path.to_owned(),
+        reason: "Dockerfile metadata must be valid UTF-8".to_owned(),
+    })?;
+    if text
+        .chars()
+        .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
+    {
+        return Err(CorpusError::UnsafeMaterializationPath {
+            path: normalized_path.to_owned(),
+            reason: "Dockerfile metadata contains unsupported control characters".to_owned(),
+        });
+    }
+    let mut records = Vec::new();
+    for raw_line in text.lines() {
+        let line = raw_line.trim();
+        let Some((instruction, arguments)) = line.split_once(char::is_whitespace) else {
+            continue;
+        };
+        if !instruction.eq_ignore_ascii_case("FROM") {
+            continue;
+        }
+        if arguments.contains('\\') {
+            return Err(CorpusError::UnsafeMaterializationPath {
+                path: normalized_path.to_owned(),
+                reason: "continued Dockerfile FROM instructions are unsupported".to_owned(),
+            });
+        }
+        let reference = arguments
+            .split_whitespace()
+            .find(|token| !token.starts_with("--"))
+            .ok_or_else(|| CorpusError::UnsafeMaterializationPath {
+                path: normalized_path.to_owned(),
+                reason: "Dockerfile FROM instruction has no image reference".to_owned(),
+            })?;
+        if reference.contains(['$', '\0']) {
+            return Err(CorpusError::UnsafeMaterializationPath {
+                path: normalized_path.to_owned(),
+                reason: "dynamic Dockerfile FROM references are unsupported".to_owned(),
+            });
+        }
+        let digest_pinned = digest_pinned_oci_reference(reference);
+        let mut blockers = vec![SpecialObjectBlockerCode::DockerfileMetadataOnly];
+        if reference != "scratch" && !digest_pinned {
+            blockers.push(SpecialObjectBlockerCode::OciReferenceNotDigestPinned);
+        }
+        records.push(SpecialObjectInspection {
+            normalized_path: normalized_path.to_owned(),
+            metadata: SpecialObjectMetadata::OciImageReference {
+                reference: reference.to_owned(),
+                digest_pinned,
+            },
+            blockers,
+        });
+    }
+    if records.is_empty() {
+        return Err(CorpusError::UnsafeMaterializationPath {
+            path: normalized_path.to_owned(),
+            reason: "Dockerfile contains no statically inspectable FROM instruction".to_owned(),
+        });
+    }
+    Ok(records)
+}
+
+fn digest_pinned_oci_reference(reference: &str) -> bool {
+    reference
+        .rsplit_once("@sha256:")
+        .is_some_and(|(name, digest)| {
+            !name.is_empty()
+                && digest.len() == 64
+                && digest
+                    .bytes()
+                    .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        })
 }
 
 fn read_bounded_regular_file(
@@ -673,11 +1168,16 @@ fn validate_normalized_relative_path(path: &str, allow_dot: bool) -> Result<(), 
     if path.contains('\\') {
         return Err("backslashes are forbidden".to_owned());
     }
-    if path
-        .split('/')
-        .any(|component| component.is_empty() || matches!(component, "." | ".."))
-    {
-        return Err("path must be normalized without empty, dot, or parent components".to_owned());
+    if path.chars().any(char::is_control) {
+        return Err("control characters are forbidden".to_owned());
+    }
+    if path.split('/').any(|component| {
+        component.is_empty() || matches!(component, "." | "..") || component.trim() != component
+    }) {
+        return Err(
+            "path must be normalized without empty, dot, parent, or edge-whitespace components"
+                .to_owned(),
+        );
     }
     Ok(())
 }
@@ -1495,6 +1995,195 @@ mod tests {
             materialize_pinned_local_root(&catalog, &excessive_count),
             Err(CorpusError::MaterializationLimitExceeded { limit, .. })
                 if limit.starts_with("max_file_count")
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn contract_special_objects_are_deterministic_metadata_only_blockers()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let catalog = bundled_corpus_profiles()?;
+        let checkout_root = checked_in_materialization_root()?;
+        let request = local_request(
+            &checkout_root,
+            "development/special-object-inspection",
+            LocalMaterializationLimits::default(),
+        );
+
+        let first = materialize_pinned_local_root(&catalog, &request)?;
+        let second = materialize_pinned_local_root(&catalog, &request)?;
+        assert_eq!(first, second);
+        assert_eq!(first.schema_version, "hsai.local-corpus-materialization.v2");
+        assert_eq!(first.special_objects.len(), 4);
+        assert_eq!(first.readiness_blockers.len(), 5);
+        assert_eq!(
+            first.settlement_readiness,
+            SettlementReadiness::EvaluationOnly
+        );
+        assert!(!first.executed_files);
+        assert_eq!(
+            first
+                .readiness_blockers
+                .iter()
+                .map(|blocker| blocker.code)
+                .collect::<std::collections::BTreeSet<_>>(),
+            std::collections::BTreeSet::from([
+                SpecialObjectBlockerCode::ArchiveNotExtracted,
+                SpecialObjectBlockerCode::DockerfileMetadataOnly,
+                SpecialObjectBlockerCode::LfsContentNotMaterialized,
+                SpecialObjectBlockerCode::SubmoduleCommitUnverified,
+                SpecialObjectBlockerCode::SubmoduleObjectMissing,
+            ])
+        );
+        assert!(first.special_objects.iter().any(|object| {
+            matches!(
+                &object.metadata,
+                SpecialObjectMetadata::GitLfsPointer {
+                    oid_sha256,
+                    declared_size: 4096,
+                } if oid_sha256 == "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            )
+        }));
+        assert!(first.special_objects.iter().any(|object| {
+            matches!(
+                &object.metadata,
+                SpecialObjectMetadata::OciImageReference {
+                    digest_pinned: true,
+                    ..
+                }
+            ) && object.blockers == [SpecialObjectBlockerCode::DockerfileMetadataOnly]
+        }));
+        assert!(first.files.iter().all(|file| {
+            !file
+                .normalized_path
+                .contains("vendor/recorded-safe-declaration/")
+        }));
+        Ok(())
+    }
+
+    #[test]
+    fn contract_unsafe_submodule_declarations_are_blocked_without_resolution()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let checkout = tempfile::tempdir()?;
+        write_test_tree(
+            checkout.path(),
+            &[(
+                ".gitmodules",
+                b"[submodule \"unsafe\"]\npath = ../escape\nurl = file:///tmp/repo\n",
+            )],
+        )?;
+        let catalog = bundled_corpus_profiles()?;
+        let request = LocalMaterializationRequest {
+            profile_id: "cryptohack-ctf-archive",
+            checkout_root: checkout.path(),
+            materialization_root: ".",
+            expected_commit: CRYPTOHACK_PIN,
+            observed_checkout_commit: CRYPTOHACK_PIN,
+            limits: LocalMaterializationLimits::default(),
+        };
+        let materialization = materialize_pinned_local_root(&catalog, &request)?;
+        assert_eq!(materialization.special_objects.len(), 1);
+        assert_eq!(
+            materialization.special_objects[0].blockers,
+            [
+                SpecialObjectBlockerCode::UnsafeSubmodulePath,
+                SpecialObjectBlockerCode::UnsafeSubmoduleUrl,
+                SpecialObjectBlockerCode::SubmoduleObjectMissing,
+                SpecialObjectBlockerCode::SubmoduleCommitUnverified,
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn contract_malformed_or_unsupported_special_metadata_fails_closed()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let catalog = bundled_corpus_profiles()?;
+        for (name, bytes) in [
+            (
+                ".gitmodules",
+                b"[submodule \"bad\"]\npath = valid\nurl = \xff\n".as_slice(),
+            ),
+            (
+                "large.bin",
+                b"version https://git-lfs.github.com/spec/v1\noid sha256:not-a-digest\nsize 7\n"
+                    .as_slice(),
+            ),
+            ("Dockerfile", b"FROM ${UNRESOLVED_IMAGE}\n".as_slice()),
+        ] {
+            let checkout = tempfile::tempdir()?;
+            write_test_tree(checkout.path(), &[(name, bytes)])?;
+            let request = LocalMaterializationRequest {
+                profile_id: "cryptohack-ctf-archive",
+                checkout_root: checkout.path(),
+                materialization_root: ".",
+                expected_commit: CRYPTOHACK_PIN,
+                observed_checkout_commit: CRYPTOHACK_PIN,
+                limits: LocalMaterializationLimits::default(),
+            };
+            assert!(matches!(
+                materialize_pinned_local_root(&catalog, &request),
+                Err(CorpusError::UnsafeMaterializationPath { .. })
+            ));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn contract_lfs_declared_content_is_never_counted_as_materialized()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let checkout = tempfile::tempdir()?;
+        write_test_tree(
+            checkout.path(),
+            &[(
+                "payload.bin",
+                b"version https://git-lfs.github.com/spec/v1\noid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nsize 4096\n",
+            )],
+        )?;
+        let catalog = bundled_corpus_profiles()?;
+        let request = LocalMaterializationRequest {
+            profile_id: "cryptohack-ctf-archive",
+            checkout_root: checkout.path(),
+            materialization_root: ".",
+            expected_commit: CRYPTOHACK_PIN,
+            observed_checkout_commit: CRYPTOHACK_PIN,
+            limits: LocalMaterializationLimits {
+                max_file_count: 10,
+                max_file_bytes: 1024,
+                max_total_bytes: 1024,
+            },
+        };
+        let materialization = materialize_pinned_local_root(&catalog, &request)?;
+        assert!(materialization.total_bytes < 1024);
+        assert_eq!(
+            materialization.special_objects[0].blockers,
+            [
+                SpecialObjectBlockerCode::LfsContentNotMaterialized,
+                SpecialObjectBlockerCode::LfsDeclaredSizeExceedsLimit,
+            ]
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn contract_hostile_control_character_filename_fails_closed()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let checkout = tempfile::tempdir()?;
+        write_test_tree(checkout.path(), &[("hostile\nname", b"inert")])?;
+        let catalog = bundled_corpus_profiles()?;
+        let request = LocalMaterializationRequest {
+            profile_id: "cryptohack-ctf-archive",
+            checkout_root: checkout.path(),
+            materialization_root: ".",
+            expected_commit: CRYPTOHACK_PIN,
+            observed_checkout_commit: CRYPTOHACK_PIN,
+            limits: LocalMaterializationLimits::default(),
+        };
+        assert!(matches!(
+            materialize_pinned_local_root(&catalog, &request),
+            Err(CorpusError::UnsafeMaterializationPath { reason, .. })
+                if reason.contains("control characters")
         ));
         Ok(())
     }
