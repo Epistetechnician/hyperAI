@@ -7,12 +7,21 @@ Implemented and tested locally does not mean production-ready.
   cleanup, evidence, finality, and mock reconciliation. The Docker host and
   daemon remain trusted; this is not adversarial production sandbox
   qualification.
+- The Docker image, explicit platform, argv, exact `LANG`/`TZ` values, fixed
+  mounts, and isolation/resource controls are cryptographically bound to the
+  frozen claim environment before Docker is invoked. This prevents
+  operator-selected environment drift but does not establish cross-host
+  determinism or qualify the image, daemon, kernel, rootless/user-namespace
+  configuration, or seccomp/AppArmor policy for hostile production code.
 - SQLite transaction/concurrency behavior and PostgreSQL 16 migrations are
   tested. Production HA, backup/restore, and rolling-upgrade behavior are not.
 - External corpus profiles and regular-file materialization from already-pinned
   local checkouts are tested. Special objects are inspected inertly and block
-  readiness when unresolved. The build does not clone upstream repositories,
-  retrieve submodule or LFS objects, extract archives, or materialize OCI images.
+  readiness when unresolved. Reviewed overlays compile sanitized local
+  inventories into deterministic evaluation packages, but they do not establish
+  runnable runtime/verifier correctness or upstream item permissions. The build
+  does not clone upstream repositories, retrieve submodule or LFS objects,
+  extract archives, or materialize OCI images.
 - External challenge sources do not attest live completeness. Only the hermetic
   local fixture reaches `SETTLEMENT_READY`.
 - Live HIP-4 reading is optional and not a CI dependency. Public endpoint
@@ -25,3 +34,7 @@ Implemented and tested locally does not mean production-ready.
   aggregation, IAM, rate limiting, TLS termination, HA, tracing, alerting,
   KMS/HSM integration, S3 retention controls, and disaster-recovery automation
   remain future work.
+- API dependency readiness is evaluated from injected cached fixed-schema state;
+  stale, unavailable, unknown, degraded, and clock-regressed state fails closed.
+  Real PostgreSQL, object-store, signer, outbox, and source probe producers are
+  deployment work; the development role header is not production IAM.

@@ -6,8 +6,111 @@
     "description": "Implemented local and read-only API surface. External writes are disabled."
   },
   "paths": {
-    "/health/live": {"get": {"operationId": "live", "responses": {"200": {"description": "Process is live"}}}},
-    "/health/ready": {"get": {"operationId": "ready", "responses": {"200": {"description": "Local dependencies are ready"}}}},
+    "/health/live": {
+      "get": {
+        "operationId": "live",
+        "description": "Process-only liveness. This response does not expose or evaluate dependency state.",
+        "responses": {
+          "200": {
+            "description": "Process is live",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["status", "external_writes_enabled"],
+                  "properties": {
+                    "status": {"const": "live"},
+                    "external_writes_enabled": {"const": false}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "operationId": "ready",
+        "description": "Minimal aggregate readiness evaluated fail-closed from a cached fixed-schema dependency snapshot and an injected clock. No dependency probe runs in this request.",
+        "responses": {
+          "200": {
+            "description": "The cached snapshot is fresh and every required dependency is ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["status", "external_writes_enabled"],
+                  "properties": {
+                    "status": {"const": "ready"},
+                    "external_writes_enabled": {"const": false}
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Snapshot is stale/unavailable, clock regressed/failed, or a required dependency is not ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["status", "external_writes_enabled"],
+                  "properties": {
+                    "status": {"const": "not-ready"},
+                    "external_writes_enabled": {"const": false}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/dependencies": {
+      "get": {
+        "operationId": "dependencyReadiness",
+        "description": "Operator-gated fixed dependency states from cached observations. Error payloads, identifiers, paths, and active probes are excluded.",
+        "parameters": [
+          {"name": "x-hsai-role", "in": "header", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {
+          "200": {
+            "description": "Fixed dependency readiness detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["status", "freshness", "dependencies", "external_writes_enabled"],
+                  "properties": {
+                    "status": {"type": "string", "enum": ["READY", "NOT_READY"]},
+                    "freshness": {"type": "string", "enum": ["FRESH", "STALE", "CLOCK_REGRESSION", "UNAVAILABLE"]},
+                    "dependencies": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["database_schema", "outbox", "evidence_store", "signer_registry", "required_sources"],
+                      "properties": {
+                        "database_schema": {"type": "string", "enum": ["READY", "DEGRADED", "UNAVAILABLE", "UNKNOWN"]},
+                        "outbox": {"type": "string", "enum": ["READY", "DEGRADED", "UNAVAILABLE", "UNKNOWN"]},
+                        "evidence_store": {"type": "string", "enum": ["READY", "DEGRADED", "UNAVAILABLE", "UNKNOWN"]},
+                        "signer_registry": {"type": "string", "enum": ["READY", "DEGRADED", "UNAVAILABLE", "UNKNOWN"]},
+                        "required_sources": {"type": "string", "enum": ["READY", "DEGRADED", "UNAVAILABLE", "UNKNOWN"]}
+                      }
+                    },
+                    "external_writes_enabled": {"const": false}
+                  }
+                }
+              }
+            }
+          },
+          "403": {"description": "Operator role required"}
+        }
+      }
+    },
     "/v1/adapters/capabilities": {"get": {"operationId": "adapterCapabilities", "responses": {"200": {"description": "Dated adapter capability matrix"}}}},
     "/v1/claims/validate": {
       "post": {

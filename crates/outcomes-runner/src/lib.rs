@@ -15,9 +15,10 @@ use std::{
 
 use outcomes_domain::{
     AdmissionDecisionKind, AdmissionDecisionV1, CandidateEnvelopeV1, ClaimSpecV1, DeterminismTier,
-    ExecutionManifestV1, ExecutionOutcome, ResourceUsageV1, Sha256Digest, UtcTimestamp,
-    domain_separated_digest,
+    ExecutionManifestV1, ExecutionOutcome, NetworkPolicy, ResourceUsageV1, Sha256Digest,
+    UtcTimestamp, VerificationPolicyV1, domain_separated_digest,
 };
+use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
@@ -53,6 +54,9 @@ pub enum RunnerError {
     /// An attached output reader could not be joined safely.
     #[error("OCI output reader terminated unexpectedly")]
     OciOutputReader,
+    /// The runtime OCI identity differs from the environment frozen into the claim.
+    #[error("Docker environment identity does not match the frozen claim")]
+    DockerEnvironmentIdentityMismatch,
 }
 
 /// Immutable input to one verification attempt.
@@ -256,6 +260,8 @@ pub struct OciSandboxPolicy {
     pub image_repository: String,
     /// Immutable `sha256:` image reference.
     pub image_digest: String,
+    /// Explicit Docker platform in canonical `linux/architecture` form.
+    pub platform: String,
     /// Container UID; zero is forbidden.
     pub user_id: u32,
     /// Whether the root filesystem is read-only.
@@ -280,6 +286,109 @@ pub struct OciSandboxPolicy {
     pub scratch_bytes: u64,
     /// Hard wall-clock timeout for the probe process.
     pub timeout_millis: u64,
+}
+
+/// Canonical claim-bound identity of one Docker verification environment.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[allow(clippy::struct_excessive_bools)]
+pub struct DockerEnvironmentBindingV1 {
+    /// Schema and domain-separation version.
+    pub schema_version: String,
+    /// Repository portion of the immutable image reference.
+    pub image_repository: String,
+    /// Canonical immutable image digest.
+    pub image_digest: String,
+    /// Explicit OS and CPU architecture selected from a multi-platform image.
+    pub platform: String,
+    /// Non-root container UID.
+    pub user_id: u32,
+    /// Structured verifier argv, excluding the fixed environment wrapper.
+    pub argv: Vec<String>,
+    /// Exact environment values installed after clearing the image environment.
+    pub environment: BTreeMap<String, String>,
+    /// Exact sorted environment-key allowlist.
+    pub environment_allowlist: Vec<String>,
+    /// Whether the root filesystem is read-only.
+    pub read_only_root: bool,
+    /// Whether all Linux capabilities are dropped.
+    pub drop_all_capabilities: bool,
+    /// Whether container networking is disabled.
+    pub network_disabled: bool,
+    /// Whether any host or Docker socket is mounted.
+    pub host_socket_mounted: bool,
+    /// Maximum process count.
+    pub pids_limit: u32,
+    /// Maximum container memory in bytes.
+    pub memory_bytes: u64,
+    /// CPU quota in thousandths of one CPU.
+    pub cpu_millis: u32,
+    /// Isolated scratch tmpfs size in bytes.
+    pub scratch_bytes: u64,
+    /// Hard wall-clock timeout in milliseconds.
+    pub timeout_millis: u64,
+    /// Fixed read-only candidate mount destination.
+    pub candidate_mount_destination: String,
+    /// Fixed read-only verifier-data mount destination.
+    pub verifier_mount_destination: String,
+    /// Versioned structured environment-clearing wrapper identity.
+    pub wrapper_version: String,
+}
+
+/// Build the canonical Docker environment identity for explicit locale/timezone values.
+///
+/// # Errors
+///
+/// Returns an error when OCI controls or exact environment values are unsafe.
+pub fn docker_environment_binding(
+    policy: &OciSandboxPolicy,
+    locale: &str,
+    timezone: &str,
+) -> Result<DockerEnvironmentBindingV1, RunnerError> {
+    validate_oci_policy(policy)?;
+    let environment = exact_policy_environment(locale, timezone, policy)?;
+    let mut environment_allowlist = policy.environment_allowlist.clone();
+    environment_allowlist.sort();
+    environment_allowlist.dedup();
+    Ok(DockerEnvironmentBindingV1 {
+        schema_version: "hsai.docker-environment-binding.v1".to_owned(),
+        image_repository: policy.image_repository.clone(),
+        image_digest: policy.image_digest.clone(),
+        platform: policy.platform.clone(),
+        user_id: policy.user_id,
+        argv: policy.argv.clone(),
+        environment,
+        environment_allowlist,
+        read_only_root: policy.read_only_root,
+        drop_all_capabilities: policy.drop_all_capabilities,
+        network_disabled: policy.network_disabled,
+        host_socket_mounted: policy.host_socket_mounted,
+        pids_limit: policy.pids_limit,
+        memory_bytes: policy.memory_bytes,
+        cpu_millis: policy.cpu_millis,
+        scratch_bytes: policy.scratch_bytes,
+        timeout_millis: policy.timeout_millis,
+        candidate_mount_destination: CONTAINER_CANDIDATE_PATH.to_owned(),
+        verifier_mount_destination: CONTAINER_VERIFIER_PATH.to_owned(),
+        wrapper_version: "hsai.docker-env-i-wrapper.v1:/usr/bin/env".to_owned(),
+    })
+}
+
+/// Compute the domain-separated canonical Docker environment identity digest.
+///
+/// # Errors
+///
+/// Returns an error when the environment binding is unsafe or cannot be
+/// canonicalized.
+pub fn docker_environment_digest(
+    policy: &OciSandboxPolicy,
+    locale: &str,
+    timezone: &str,
+) -> Result<Sha256Digest, RunnerError> {
+    Ok(domain_separated_digest(
+        "hsai.docker-environment-binding.v1",
+        &docker_environment_binding(policy, locale, timezone)?,
+    )?)
 }
 
 /// Result of enforcing the OCI control-plane contract against a local daemon.
@@ -408,6 +517,7 @@ pub fn validate_oci_policy(policy: &OciSandboxPolicy) -> Result<(), RunnerError>
             "container user must be non-root".to_owned(),
         ));
     }
+    split_docker_platform(&policy.platform)?;
     if !policy.read_only_root || !policy.drop_all_capabilities || !policy.network_disabled {
         return Err(RunnerError::UnsafeOciPolicy(
             "read-only root, dropped capabilities, and disabled network are required".to_owned(),
@@ -445,6 +555,31 @@ pub fn validate_oci_policy(policy: &OciSandboxPolicy) -> Result<(), RunnerError>
         ));
     }
     Ok(())
+}
+
+fn split_docker_platform(platform: &str) -> Result<(&str, &str), RunnerError> {
+    let Some((operating_system, architecture)) = platform.split_once('/') else {
+        return Err(RunnerError::UnsafeOciPolicy(
+            "Docker platform must be explicit canonical os/architecture".to_owned(),
+        ));
+    };
+    if operating_system != "linux"
+        || !matches!(architecture, "amd64" | "arm64")
+        || architecture.contains('/')
+    {
+        return Err(RunnerError::UnsafeOciPolicy(
+            "Docker platform must be linux/amd64 or linux/arm64".to_owned(),
+        ));
+    }
+    Ok((operating_system, architecture))
+}
+
+fn canonical_cpu_architecture(architecture: &str) -> Option<&'static str> {
+    match architecture {
+        "amd64" | "x86_64" => Some("amd64"),
+        "arm64" | "aarch64" => Some("arm64"),
+        _ => None,
+    }
 }
 
 fn validate_structured_argv(argv: &[String]) -> Result<(), RunnerError> {
@@ -494,6 +629,8 @@ pub fn docker_create_args(
         "create".to_owned(),
         "--name".to_owned(),
         container_name.to_owned(),
+        "--platform".to_owned(),
+        policy.platform.clone(),
         "--network".to_owned(),
         "none".to_owned(),
         "--read-only".to_owned(),
@@ -721,11 +858,19 @@ impl VerificationRunner for DockerVerificationRunner {
     fn execute(&mut self, request: &RunnerRequest<'_>) -> Result<ExecutionManifestV1, RunnerError> {
         self.last_public_output = None;
         validate_runner_request(request)?;
-        validate_oci_policy(&self.policy)?;
-        if self.policy.argv != request.claim.verification_policy.argv {
-            return Err(RunnerError::UnsafeOciPolicy(
-                "Docker policy argv differs from the frozen claim argv".to_owned(),
-            ));
+        validate_docker_policy_against_verification(
+            &self.policy,
+            &request.claim.verification_policy,
+        )?;
+        let environment_binding = docker_environment_binding(
+            &self.policy,
+            &request.claim.verification_policy.locale,
+            &request.claim.verification_policy.timezone,
+        )?;
+        let environment_binding_digest =
+            domain_separated_digest("hsai.docker-environment-binding.v1", &environment_binding)?;
+        if environment_binding_digest != request.claim.verification_policy.environment_digest {
+            return Err(RunnerError::DockerEnvironmentIdentityMismatch);
         }
         if plain_digest(&self.verifier_expected_bytes)
             != request.claim.verification_policy.validator_artifact_digest
@@ -746,7 +891,7 @@ impl VerificationRunner for DockerVerificationRunner {
             ));
         }
 
-        let environment = exact_runner_environment(request, &self.policy)?;
+        let environment = environment_binding.environment.clone();
         let candidate_file = read_only_input_file("candidate", request.candidate_bytes)?;
         let verifier_file = read_only_input_file("verifier", &self.verifier_expected_bytes)?;
         let sequence = OCI_PROBE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
@@ -771,6 +916,7 @@ impl VerificationRunner for DockerVerificationRunner {
         let mut guard = ContainerGuard::new(self.docker_binary.clone(), container_name.clone());
         let inspection = inspect_container(&self.docker_binary, &container_name)?;
         let control_facts = validate_daemon_controls(
+            &self.docker_binary,
             &inspection,
             &self.policy,
             candidate_file.path(),
@@ -860,6 +1006,7 @@ impl VerificationRunner for DockerVerificationRunner {
             request,
             &self.policy,
             &container_name,
+            environment_binding_digest,
             &environment,
             &control_facts,
             &stdout,
@@ -883,26 +1030,76 @@ fn validate_runner_request(request: &RunnerRequest<'_>) -> Result<(), RunnerErro
     Ok(())
 }
 
-fn exact_runner_environment(
-    request: &RunnerRequest<'_>,
+fn validate_docker_policy_against_verification(
+    policy: &OciSandboxPolicy,
+    verification_policy: &VerificationPolicyV1,
+) -> Result<(), RunnerError> {
+    validate_oci_policy(policy)?;
+    if policy.argv != verification_policy.argv {
+        return Err(RunnerError::UnsafeOciPolicy(
+            "Docker policy argv differs from the frozen verification argv".to_owned(),
+        ));
+    }
+    if verification_policy.network_policy != NetworkPolicy::Disabled || !policy.network_disabled {
+        return Err(RunnerError::UnsafeOciPolicy(
+            "Docker verifier currently requires a frozen disabled-network policy".to_owned(),
+        ));
+    }
+    let (_, architecture) = split_docker_platform(&policy.platform)?;
+    if canonical_cpu_architecture(&verification_policy.cpu_architecture) != Some(architecture) {
+        return Err(RunnerError::UnsafeOciPolicy(
+            "Docker platform architecture differs from the frozen verification architecture"
+                .to_owned(),
+        ));
+    }
+    let mut policy_keys = policy.environment_allowlist.clone();
+    policy_keys.sort();
+    let mut frozen_keys = verification_policy.environment_allowlist.clone();
+    frozen_keys.sort();
+    if policy_keys != frozen_keys {
+        return Err(RunnerError::UnsafeOciPolicy(
+            "Docker environment allowlist differs from the frozen verification allowlist"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn exact_policy_environment(
+    locale: &str,
+    timezone: &str,
     policy: &OciSandboxPolicy,
 ) -> Result<BTreeMap<String, String>, RunnerError> {
+    let mut policy_keys = policy.environment_allowlist.clone();
+    policy_keys.sort();
+    if policy_keys.windows(2).any(|keys| keys[0] == keys[1]) {
+        return Err(RunnerError::UnsafeOciPolicy(
+            "environment allowlist contains duplicate keys".to_owned(),
+        ));
+    }
+    if policy_keys != ["LANG", "TZ"] {
+        return Err(RunnerError::UnsafeOciPolicy(
+            "Docker environment allowlist must contain exactly LANG and TZ".to_owned(),
+        ));
+    }
+    if locale.is_empty() || timezone.is_empty() || locale.contains('\0') || timezone.contains('\0')
+    {
+        return Err(RunnerError::UnsafeOciPolicy(
+            "Docker locale and timezone must be non-empty and contain no NUL".to_owned(),
+        ));
+    }
     let mut environment = BTreeMap::new();
     for name in &policy.environment_allowlist {
         let value = match name.as_str() {
-            "LANG" => request.claim.verification_policy.locale.clone(),
-            "TZ" => request.claim.verification_policy.timezone.clone(),
+            "LANG" => locale.to_owned(),
+            "TZ" => timezone.to_owned(),
             _ => {
                 return Err(RunnerError::UnsafeOciPolicy(format!(
                     "no exact frozen value is defined for environment key {name}"
                 )));
             }
         };
-        if environment.insert(name.clone(), value).is_some() {
-            return Err(RunnerError::UnsafeOciPolicy(
-                "environment allowlist contains duplicate keys".to_owned(),
-            ));
-        }
+        environment.insert(name.clone(), value);
     }
     validate_exact_environment(policy, &environment)?;
     Ok(environment)
@@ -1032,6 +1229,7 @@ fn json_path<'a>(
 }
 
 fn validate_daemon_controls(
+    docker_binary: &Path,
     inspection: &ContainerInspection,
     policy: &OciSandboxPolicy,
     candidate_path: &Path,
@@ -1102,9 +1300,21 @@ fn validate_daemon_controls(
     let image_id = json_path(value, &["Image"])?
         .as_str()
         .ok_or_else(|| RunnerError::OciContract("Docker image ID is not text".to_owned()))?;
+    let (expected_os, expected_architecture) = split_docker_platform(&policy.platform)?;
+    require_json_string(value, &["Platform"], expected_os)?;
+    let (actual_os, actual_architecture) = inspect_image_platform(docker_binary, image_id)?;
+    if actual_os != expected_os || actual_architecture != expected_architecture {
+        return Err(RunnerError::OciContract(
+            "resolved image OS/architecture differs from the claim-bound Docker platform"
+                .to_owned(),
+        ));
+    }
     Ok(BTreeMap::from([
         ("container_image_id".to_owned(), image_id.to_owned()),
         ("image_reference".to_owned(), image_reference),
+        ("image_os".to_owned(), actual_os),
+        ("image_architecture".to_owned(), actual_architecture),
+        ("requested_platform".to_owned(), policy.platform.clone()),
         ("network_mode".to_owned(), "none".to_owned()),
         ("root_filesystem".to_owned(), "read-only".to_owned()),
         ("capabilities".to_owned(), "drop-all".to_owned()),
@@ -1115,6 +1325,40 @@ fn validate_daemon_controls(
             "/usr/bin/env -i".to_owned(),
         ),
     ]))
+}
+
+fn inspect_image_platform(
+    docker_binary: &Path,
+    image_id: &str,
+) -> Result<(String, String), RunnerError> {
+    let output = Command::new(docker_binary)
+        .args(["image", "inspect", image_id])
+        .output()?;
+    if !output.status.success() {
+        return Err(RunnerError::OciUnavailable(bounded_control_error(
+            &output.stderr,
+        )));
+    }
+    let documents: serde_json::Value = serde_json::from_slice(&output.stdout).map_err(|error| {
+        RunnerError::OciContract(format!("invalid Docker image inspect JSON: {error}"))
+    })?;
+    let image = documents
+        .as_array()
+        .and_then(|values| values.first())
+        .ok_or_else(|| {
+            RunnerError::OciContract("Docker image inspect result is empty".to_owned())
+        })?;
+    let operating_system = image
+        .get("Os")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| RunnerError::OciContract("Docker image OS is absent".to_owned()))?;
+    let architecture = image
+        .get("Architecture")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            RunnerError::OciContract("Docker image architecture is absent".to_owned())
+        })?;
+    Ok((operating_system.to_owned(), architecture.to_owned()))
 }
 
 fn require_json_string(
@@ -1406,6 +1650,7 @@ fn build_docker_manifest(
     request: &RunnerRequest<'_>,
     policy: &OciSandboxPolicy,
     container_name: &str,
+    environment_binding_digest: Sha256Digest,
     environment: &BTreeMap<String, String>,
     control_facts: &BTreeMap<String, String>,
     stdout: &BoundedOutputStream,
@@ -1421,7 +1666,7 @@ fn build_docker_manifest(
             request.candidate.artifact_digest,
             request.candidate.artifact_byte_length,
             request.claim.verification_policy.validator_artifact_digest,
-            format!("{}@{}", policy.image_repository, policy.image_digest),
+            environment_binding_digest,
             control_facts,
         ),
     )?;
@@ -1449,6 +1694,10 @@ fn build_docker_manifest(
         ("container_name".to_owned(), container_name.to_owned()),
         ("stdout_bytes".to_owned(), stdout.byte_count.to_string()),
         ("stderr_bytes".to_owned(), stderr.byte_count.to_string()),
+        (
+            "docker_environment_binding_digest".to_owned(),
+            environment_binding_digest.to_hex(),
+        ),
     ]);
     let actual_argv = ["/usr/bin/env".to_owned(), "-i".to_owned()]
         .into_iter()
@@ -1733,6 +1982,7 @@ mod tests {
         let unsafe_policy = OciSandboxPolicy {
             image_repository: "example.invalid/validator".to_owned(),
             image_digest: format!("sha256:{}", "a".repeat(64)),
+            platform: "linux/arm64".to_owned(),
             user_id: 0,
             read_only_root: true,
             drop_all_capabilities: true,
@@ -1755,6 +2005,7 @@ mod tests {
         let policy = OciSandboxPolicy {
             image_repository: "alpine".to_owned(),
             image_digest: format!("sha256:{}", "a".repeat(64)),
+            platform: "linux/arm64".to_owned(),
             user_id: 65_534,
             read_only_root: true,
             drop_all_capabilities: true,
@@ -1802,6 +2053,7 @@ mod tests {
         OciSandboxPolicy {
             image_repository: "alpine".to_owned(),
             image_digest: format!("sha256:{}", "a".repeat(64)),
+            platform: "linux/arm64".to_owned(),
             user_id: 65_534,
             read_only_root: true,
             drop_all_capabilities: true,
@@ -1965,12 +2217,208 @@ mod tests {
         ));
     }
 
+    fn binding_fixture()
+    -> Result<(OciSandboxPolicy, VerificationPolicyV1), Box<dyn std::error::Error>> {
+        let argv = vec![
+            "/usr/bin/cmp".to_owned(),
+            CONTAINER_CANDIDATE_PATH.to_owned(),
+            CONTAINER_VERIFIER_PATH.to_owned(),
+        ];
+        let policy = verifier_policy(argv.clone());
+        let mut verification_policy = local_demo_claim_draft()?.verification_policy;
+        verification_policy.argv = argv;
+        verification_policy.resource_limits.wall_clock_millis = policy.timeout_millis;
+        Ok((policy, verification_policy))
+    }
+
+    #[test]
+    fn contract_docker_environment_binding_has_stable_golden_digest()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (policy, verification_policy) = binding_fixture()?;
+        let binding = docker_environment_binding(
+            &policy,
+            &verification_policy.locale,
+            &verification_policy.timezone,
+        )?;
+        assert_eq!(binding.schema_version, "hsai.docker-environment-binding.v1");
+        assert_eq!(binding.environment["LANG"], "C.UTF-8");
+        assert_eq!(binding.environment["TZ"], "UTC");
+        assert_eq!(
+            docker_environment_digest(
+                &policy,
+                &verification_policy.locale,
+                &verification_policy.timezone,
+            )?
+            .to_hex(),
+            "3e3bc79af396f6151769f1cdf4470b30a30028bf5a6b2ed8f2c1e9680add1190"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn contract_every_mutable_environment_identity_field_changes_or_fails_closed()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (policy, verification_policy) = binding_fixture()?;
+        let baseline = docker_environment_digest(
+            &policy,
+            &verification_policy.locale,
+            &verification_policy.timezone,
+        )?;
+
+        let mut mutations = Vec::new();
+        let mut changed = policy.clone();
+        changed.image_repository = "example.invalid/other".to_owned();
+        mutations.push((changed, verification_policy.clone()));
+        let mut changed = policy.clone();
+        changed.image_digest = format!("sha256:{}", "b".repeat(64));
+        mutations.push((changed, verification_policy.clone()));
+        let mut changed = policy.clone();
+        let mut changed_verification = verification_policy.clone();
+        changed.platform = "linux/amd64".to_owned();
+        changed_verification.cpu_architecture = "x86_64".to_owned();
+        mutations.push((changed, changed_verification));
+        let mut changed = policy.clone();
+        changed.user_id = 65_533;
+        mutations.push((changed, verification_policy.clone()));
+        let mut changed = policy.clone();
+        let mut changed_verification = verification_policy.clone();
+        changed.argv.push("--strict".to_owned());
+        changed_verification.argv.push("--strict".to_owned());
+        mutations.push((changed, changed_verification));
+        let mut changed_verification = verification_policy.clone();
+        changed_verification.locale = "C".to_owned();
+        mutations.push((policy.clone(), changed_verification));
+        let mut changed_verification = verification_policy.clone();
+        changed_verification.timezone = "Etc/UTC".to_owned();
+        mutations.push((policy.clone(), changed_verification));
+        let mut changed = policy.clone();
+        changed.pids_limit += 1;
+        mutations.push((changed, verification_policy.clone()));
+        let mut changed = policy.clone();
+        changed.memory_bytes += 4_096;
+        mutations.push((changed, verification_policy.clone()));
+        let mut changed = policy.clone();
+        changed.cpu_millis += 1;
+        mutations.push((changed, verification_policy.clone()));
+        let mut changed = policy.clone();
+        changed.scratch_bytes += 4_096;
+        mutations.push((changed, verification_policy.clone()));
+        let mut changed = policy.clone();
+        changed.timeout_millis -= 1;
+        mutations.push((changed, verification_policy.clone()));
+
+        let mut observed = std::collections::BTreeSet::new();
+        observed.insert(baseline.to_hex());
+        for (changed_policy, changed_verification) in mutations {
+            observed.insert(
+                docker_environment_digest(
+                    &changed_policy,
+                    &changed_verification.locale,
+                    &changed_verification.timezone,
+                )?
+                .to_hex(),
+            );
+        }
+        assert_eq!(observed.len(), 13);
+
+        let mut no_read_only = policy.clone();
+        no_read_only.read_only_root = false;
+        let mut capabilities_retained = policy.clone();
+        capabilities_retained.drop_all_capabilities = false;
+        let mut network_enabled = policy.clone();
+        network_enabled.network_disabled = false;
+        let mut socket_mounted = policy.clone();
+        socket_mounted.host_socket_mounted = true;
+        for unsafe_policy in [
+            no_read_only,
+            capabilities_retained,
+            network_enabled,
+            socket_mounted,
+        ] {
+            assert!(
+                docker_environment_digest(
+                    &unsafe_policy,
+                    &verification_policy.locale,
+                    &verification_policy.timezone,
+                )
+                .is_err()
+            );
+        }
+        let mut wrong_allowlist = policy.clone();
+        wrong_allowlist.environment_allowlist = vec!["LANG".to_owned()];
+        assert!(
+            docker_environment_digest(
+                &wrong_allowlist,
+                &verification_policy.locale,
+                &verification_policy.timezone,
+            )
+            .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn contract_environment_mismatch_is_rejected_before_docker_spawn()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let expected = b"expected";
+        let (policy, mut verification_policy) = binding_fixture()?;
+        verification_policy.validator_artifact_digest = plain_digest(expected);
+        let mut draft = local_demo_claim_draft()?;
+        draft.verification_policy = verification_policy;
+        // Deliberately retain a digest unrelated to the Docker binding.
+        draft.verification_policy.environment_digest = Sha256Digest::from_bytes([9; 32]);
+        let claim = draft.freeze()?;
+        let candidate = candidate(claim.claim_id.clone(), expected)?;
+        let admission = evaluate_admission(&claim, &candidate)?;
+        let started = timestamp("2026-07-10T10:31:00Z")?;
+        let ended = timestamp("2026-07-10T10:31:01Z")?;
+        let mut runner = DockerVerificationRunner::new(policy, expected.to_vec())?;
+        runner.docker_binary = PathBuf::from("/definitely/absent/hsai-docker-test");
+        assert!(matches!(
+            runner.execute(&RunnerRequest {
+                claim: &claim,
+                candidate: &candidate,
+                candidate_bytes: expected,
+                admission: &admission,
+                run_id: "docker-identity-mismatch",
+                started_at: &started,
+                ended_at: &ended,
+                logical_time: &started,
+            }),
+            Err(RunnerError::DockerEnvironmentIdentityMismatch)
+        ));
+        assert!(runner.last_public_output().is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn contract_platform_and_claim_architecture_must_match()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (mut policy, verification_policy) = binding_fixture()?;
+        policy.platform = "linux/amd64".to_owned();
+        assert!(matches!(
+            validate_docker_policy_against_verification(&policy, &verification_policy),
+            Err(RunnerError::UnsafeOciPolicy(reason)) if reason.contains("architecture")
+        ));
+        policy.platform = "linux/arm/v7".to_owned();
+        assert!(
+            docker_environment_digest(
+                &policy,
+                &verification_policy.locale,
+                &verification_policy.timezone,
+            )
+            .is_err()
+        );
+        Ok(())
+    }
+
     #[test]
     #[ignore = "requires an explicitly selected preloaded local Alpine image"]
     fn external_docker_verifier_pass_fail_and_cleanup() -> Result<(), Box<dyn std::error::Error>> {
-        let (Ok(image_repository), Ok(image_digest)) = (
+        let (Ok(image_repository), Ok(image_digest), Ok(platform)) = (
             std::env::var("HSAI_TEST_OCI_IMAGE_REPOSITORY"),
             std::env::var("HSAI_TEST_OCI_IMAGE_DIGEST"),
+            std::env::var("HSAI_TEST_OCI_PLATFORM"),
         ) else {
             return Ok(());
         };
@@ -1983,11 +2431,21 @@ mod tests {
         let mut draft = local_demo_claim_draft()?;
         draft.verification_policy.validator_artifact_digest = plain_digest(expected);
         draft.verification_policy.argv.clone_from(&argv);
+        draft.verification_policy.cpu_architecture = platform
+            .strip_prefix("linux/")
+            .unwrap_or(&platform)
+            .to_owned();
         draft.verification_policy.resource_limits.wall_clock_millis = 5_000;
-        let claim = draft.freeze()?;
         let mut policy = verifier_policy(argv);
         policy.image_repository = image_repository;
         policy.image_digest = image_digest;
+        policy.platform = platform;
+        draft.verification_policy.environment_digest = docker_environment_digest(
+            &policy,
+            &draft.verification_policy.locale,
+            &draft.verification_policy.timezone,
+        )?;
+        let claim = draft.freeze()?;
         let mut runner = DockerVerificationRunner::new(policy, expected.to_vec())?;
         let started = timestamp("2026-07-10T10:31:00Z")?;
         let ended = timestamp("2026-07-10T10:31:01Z")?;
@@ -2033,9 +2491,10 @@ mod tests {
     #[ignore = "requires an explicitly selected preloaded local Alpine image"]
     fn external_docker_verifier_timeout_output_flood_and_cleanup()
     -> Result<(), Box<dyn std::error::Error>> {
-        let (Ok(image_repository), Ok(image_digest)) = (
+        let (Ok(image_repository), Ok(image_digest), Ok(platform)) = (
             std::env::var("HSAI_TEST_OCI_IMAGE_REPOSITORY"),
             std::env::var("HSAI_TEST_OCI_IMAGE_DIGEST"),
+            std::env::var("HSAI_TEST_OCI_PLATFORM"),
         ) else {
             return Ok(());
         };
@@ -2055,15 +2514,25 @@ mod tests {
             let mut draft = local_demo_claim_draft()?;
             draft.verification_policy.validator_artifact_digest = plain_digest(expected);
             draft.verification_policy.argv.clone_from(&argv);
+            draft.verification_policy.cpu_architecture = platform
+                .strip_prefix("linux/")
+                .unwrap_or(&platform)
+                .to_owned();
             draft.verification_policy.resource_limits.wall_clock_millis = timeout_millis;
             draft.verification_policy.resource_limits.output_bytes = output_bytes;
-            let claim = draft.freeze()?;
-            let candidate = candidate(claim.claim_id.clone(), expected)?;
-            let admission = evaluate_admission(&claim, &candidate)?;
             let mut policy = verifier_policy(argv.clone());
             policy.image_repository.clone_from(&image_repository);
             policy.image_digest.clone_from(&image_digest);
+            policy.platform.clone_from(&platform);
             policy.timeout_millis = timeout_millis;
+            draft.verification_policy.environment_digest = docker_environment_digest(
+                &policy,
+                &draft.verification_policy.locale,
+                &draft.verification_policy.timezone,
+            )?;
+            let claim = draft.freeze()?;
+            let candidate = candidate(claim.claim_id.clone(), expected)?;
+            let admission = evaluate_admission(&claim, &candidate)?;
             let mut runner = DockerVerificationRunner::new(policy, expected.to_vec())?
                 .with_public_preview_limit(64);
             let started = timestamp("2026-07-10T10:31:00Z")?;
@@ -2104,9 +2573,11 @@ mod tests {
     fn external_docker_daemon_enforces_oci_probe() -> Result<(), Box<dyn std::error::Error>> {
         let image_repository = std::env::var("HSAI_TEST_OCI_IMAGE_REPOSITORY")?;
         let image_digest = std::env::var("HSAI_TEST_OCI_IMAGE_DIGEST")?;
+        let platform = std::env::var("HSAI_TEST_OCI_PLATFORM")?;
         let policy = OciSandboxPolicy {
             image_repository,
             image_digest,
+            platform,
             user_id: 65_534,
             read_only_root: true,
             drop_all_capabilities: true,

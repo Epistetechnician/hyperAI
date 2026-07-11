@@ -1,5 +1,13 @@
 //! Versioned public and protected operator API composition.
 
+mod readiness;
+
+pub use readiness::{
+    DependencyReadiness, DependencyState, MAX_READINESS_AGE_SECONDS, ReadinessClock,
+    ReadinessClockError, ReadinessConfigError, ReadinessFreshness, ReadinessMonitor,
+    ReadinessProviderError, ReadinessSnapshot, ReadinessSnapshotProvider, SystemReadinessClock,
+};
+
 use std::{path::PathBuf, sync::Arc};
 
 use axum::{
@@ -38,6 +46,7 @@ pub struct ApiConfig {
 struct AppState {
     config: Arc<ApiConfig>,
     capabilities: Value,
+    readiness: ReadinessMonitor,
 }
 
 /// API construction failure.
@@ -54,13 +63,31 @@ pub enum ApiBuildError {
 ///
 /// Returns an error if the checked-in capability record cannot be parsed.
 pub fn router(config: ApiConfig) -> Result<Router, ApiBuildError> {
+    router_with_readiness(config, ReadinessMonitor::unconfigured())
+}
+
+/// Build the versioned API router with an injected cached-readiness monitor.
+///
+/// This constructor evaluates the injected provider and clock on each readiness
+/// request. Neither this constructor nor the request handlers actively probe a
+/// database, object store, signer, source adapter, or network service.
+///
+/// # Errors
+///
+/// Returns an error if the checked-in capability record cannot be parsed.
+pub fn router_with_readiness(
+    config: ApiConfig,
+    readiness: ReadinessMonitor,
+) -> Result<Router, ApiBuildError> {
     let state = AppState {
         config: Arc::new(config),
         capabilities: serde_json::from_str(CAPABILITIES)?,
+        readiness,
     };
     Ok(Router::new()
         .route("/health/live", get(live))
         .route("/health/ready", get(ready))
+        .route("/health/dependencies", get(dependencies))
         .route("/v1/adapters/capabilities", get(capabilities))
         .route("/v1/claims/validate", post(validate_claim))
         .route("/v1/demo/{scenario}", post(run_demo))
@@ -93,11 +120,44 @@ async fn live() -> Json<HealthResponse> {
     })
 }
 
-async fn ready() -> Json<HealthResponse> {
-    Json(HealthResponse {
-        status: "ready-local",
+async fn ready(State(state): State<AppState>) -> (StatusCode, Json<HealthResponse>) {
+    let is_ready = state.readiness.evaluate().is_ready();
+    let status = if is_ready {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    let body = HealthResponse {
+        status: if is_ready { "ready" } else { "not-ready" },
         external_writes_enabled: false,
-    })
+    };
+    (status, Json(body))
+}
+
+#[derive(Debug, Serialize)]
+struct DependencyHealthResponse {
+    status: &'static str,
+    freshness: ReadinessFreshness,
+    dependencies: DependencyReadiness,
+    external_writes_enabled: bool,
+}
+
+async fn dependencies(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<DependencyHealthResponse>, ApiError> {
+    require_operator(&headers, &state.config.operator_role)?;
+    let evaluation = state.readiness.evaluate();
+    Ok(Json(DependencyHealthResponse {
+        status: if evaluation.is_ready() {
+            "READY"
+        } else {
+            "NOT_READY"
+        },
+        freshness: evaluation.freshness,
+        dependencies: evaluation.dependencies,
+        external_writes_enabled: false,
+    }))
 }
 
 async fn capabilities(State(state): State<AppState>) -> Json<Value> {
@@ -377,7 +437,7 @@ impl IntoResponse for ApiError {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{fs, sync::Arc};
 
     use axum::{
         body::{Body, to_bytes},
@@ -387,6 +447,24 @@ mod tests {
 
     use super::*;
 
+    #[derive(Debug)]
+    struct FixedSnapshotProvider(Result<ReadinessSnapshot, ReadinessProviderError>);
+
+    impl ReadinessSnapshotProvider for FixedSnapshotProvider {
+        fn snapshot(&self) -> Result<ReadinessSnapshot, ReadinessProviderError> {
+            self.0
+        }
+    }
+
+    #[derive(Debug)]
+    struct FixedClock(Result<u64, ReadinessClockError>);
+
+    impl ReadinessClock for FixedClock {
+        fn now_unix_seconds(&self) -> Result<u64, ReadinessClockError> {
+            self.0
+        }
+    }
+
     fn test_router(root: PathBuf) -> Result<Router, ApiBuildError> {
         router(ApiConfig {
             artifact_root: root,
@@ -394,17 +472,259 @@ mod tests {
         })
     }
 
+    fn test_router_with_readiness(
+        root: PathBuf,
+        snapshot: Result<ReadinessSnapshot, ReadinessProviderError>,
+        now: Result<u64, ReadinessClockError>,
+        max_age_seconds: u64,
+    ) -> Result<Router, Box<dyn std::error::Error>> {
+        let monitor = ReadinessMonitor::new(
+            Arc::new(FixedSnapshotProvider(snapshot)),
+            Arc::new(FixedClock(now)),
+            max_age_seconds,
+        )?;
+        Ok(router_with_readiness(
+            ApiConfig {
+                artifact_root: root,
+                operator_role: "operator".to_owned(),
+            },
+            monitor,
+        )?)
+    }
+
     #[tokio::test]
     async fn contract_public_health_exposes_no_write_capability()
     -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
-        let response = test_router(directory.path().to_path_buf())?
+        let app = test_router(directory.path().to_path_buf())?;
+        let response = app
+            .clone()
             .oneshot(Request::builder().uri("/health/live").body(Body::empty())?)
             .await?;
         assert_eq!(response.status(), StatusCode::OK);
         let bytes = to_bytes(response.into_body(), 16_384).await?;
         let value: Value = serde_json::from_slice(&bytes)?;
         assert_eq!(value["external_writes_enabled"], false);
+        assert_eq!(value["status"], "live");
+        assert_eq!(value.as_object().map(serde_json::Map::len), Some(2));
+        assert!(value.get("dependencies").is_none());
+        let readiness = app
+            .oneshot(
+                Request::builder()
+                    .uri("/health/ready")
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(readiness.status(), StatusCode::SERVICE_UNAVAILABLE);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn contract_readiness_is_200_only_for_fresh_all_ready_snapshot()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let snapshot = ReadinessSnapshot {
+            observed_at_unix_seconds: 970,
+            dependencies: DependencyReadiness::all(DependencyState::Ready),
+        };
+        let response = test_router_with_readiness(
+            directory.path().to_path_buf(),
+            Ok(snapshot),
+            Ok(1_000),
+            30,
+        )?
+        .oneshot(
+            Request::builder()
+                .uri("/health/ready")
+                .body(Body::empty())?,
+        )
+        .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), 16_384).await?;
+        let body: Value = serde_json::from_slice(&bytes)?;
+        assert_eq!(body["status"], "ready");
+        assert_eq!(body["external_writes_enabled"], false);
+        assert_eq!(body.as_object().map(serde_json::Map::len), Some(2));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn contract_readiness_fails_closed_for_every_non_ready_dependency()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let states = [
+            DependencyState::Degraded,
+            DependencyState::Unavailable,
+            DependencyState::Unknown,
+        ];
+        for state in states {
+            let variants = [
+                DependencyReadiness {
+                    database_schema: state,
+                    ..DependencyReadiness::all(DependencyState::Ready)
+                },
+                DependencyReadiness {
+                    outbox: state,
+                    ..DependencyReadiness::all(DependencyState::Ready)
+                },
+                DependencyReadiness {
+                    evidence_store: state,
+                    ..DependencyReadiness::all(DependencyState::Ready)
+                },
+                DependencyReadiness {
+                    signer_registry: state,
+                    ..DependencyReadiness::all(DependencyState::Ready)
+                },
+                DependencyReadiness {
+                    required_sources: state,
+                    ..DependencyReadiness::all(DependencyState::Ready)
+                },
+            ];
+            for dependencies in variants {
+                let directory = tempfile::tempdir()?;
+                let app = test_router_with_readiness(
+                    directory.path().to_path_buf(),
+                    Ok(ReadinessSnapshot {
+                        observed_at_unix_seconds: 1_000,
+                        dependencies,
+                    }),
+                    Ok(1_000),
+                    30,
+                )?;
+                let response = app
+                    .oneshot(
+                        Request::builder()
+                            .uri("/health/ready")
+                            .body(Body::empty())?,
+                    )
+                    .await?;
+                assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn contract_readiness_freshness_and_provider_failures_are_fail_closed()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let all_ready = DependencyReadiness::all(DependencyState::Ready);
+        for (snapshot, now) in [
+            (
+                Ok(ReadinessSnapshot {
+                    observed_at_unix_seconds: 969,
+                    dependencies: all_ready,
+                }),
+                Ok(1_000),
+            ),
+            (
+                Ok(ReadinessSnapshot {
+                    observed_at_unix_seconds: 1_001,
+                    dependencies: all_ready,
+                }),
+                Ok(1_000),
+            ),
+            (Err(ReadinessProviderError), Ok(1_000)),
+            (
+                Ok(ReadinessSnapshot {
+                    observed_at_unix_seconds: 1_000,
+                    dependencies: all_ready,
+                }),
+                Err(ReadinessClockError),
+            ),
+        ] {
+            let directory = tempfile::tempdir()?;
+            let response =
+                test_router_with_readiness(directory.path().to_path_buf(), snapshot, now, 30)?
+                    .oneshot(
+                        Request::builder()
+                            .uri("/health/ready")
+                            .body(Body::empty())?,
+                    )
+                    .await?;
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            let bytes = to_bytes(response.into_body(), 16_384).await?;
+            let text = String::from_utf8(bytes.to_vec())?;
+            for prohibited in [
+                "claim_SECRET",
+                "candidate_SECRET",
+                "wallet_SECRET",
+                "signer_SECRET",
+                "/private/path_SECRET",
+                "raw_error_SECRET",
+            ] {
+                assert!(!text.contains(prohibited));
+            }
+        }
+        assert_eq!(
+            ReadinessMonitor::new(
+                Arc::new(FixedSnapshotProvider(Err(ReadinessProviderError))),
+                Arc::new(FixedClock(Ok(1_000))),
+                0,
+            )
+            .err(),
+            Some(ReadinessConfigError::InvalidMaxAge)
+        );
+        assert_eq!(
+            ReadinessMonitor::new(
+                Arc::new(FixedSnapshotProvider(Err(ReadinessProviderError))),
+                Arc::new(FixedClock(Ok(1_000))),
+                MAX_READINESS_AGE_SECONDS + 1,
+            )
+            .err(),
+            Some(ReadinessConfigError::InvalidMaxAge)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn contract_dependency_detail_is_operator_gated_and_fixed_schema()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let app = test_router_with_readiness(
+            directory.path().to_path_buf(),
+            Ok(ReadinessSnapshot {
+                observed_at_unix_seconds: 1_000,
+                dependencies: DependencyReadiness::all(DependencyState::Ready),
+            }),
+            Ok(1_000),
+            30,
+        )?;
+        let denied = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/health/dependencies")
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+
+        let allowed = app
+            .oneshot(
+                Request::builder()
+                    .uri("/health/dependencies")
+                    .header("x-hsai-role", "operator")
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(allowed.status(), StatusCode::OK);
+        let bytes = to_bytes(allowed.into_body(), 16_384).await?;
+        let body: Value = serde_json::from_slice(&bytes)?;
+        assert_eq!(body["status"], "READY");
+        assert_eq!(body["freshness"], "FRESH");
+        assert_eq!(body["external_writes_enabled"], false);
+        let dependencies = body["dependencies"]
+            .as_object()
+            .ok_or("dependencies must be an object")?;
+        assert_eq!(dependencies.len(), 5);
+        for key in [
+            "database_schema",
+            "outbox",
+            "evidence_store",
+            "signer_registry",
+            "required_sources",
+        ] {
+            assert_eq!(dependencies[key], "READY");
+        }
         Ok(())
     }
 
@@ -615,6 +935,7 @@ mod tests {
         for path in [
             "/health/live",
             "/health/ready",
+            "/health/dependencies",
             "/v1/adapters/capabilities",
             "/v1/claims/validate",
             "/v1/demo/{scenario}",
@@ -624,7 +945,43 @@ mod tests {
         ] {
             assert!(paths.contains_key(path), "missing OpenAPI path {path}");
         }
-        assert_eq!(paths.len(), 8);
+        assert_eq!(paths.len(), 9);
+        assert_eq!(
+            paths["/health/ready"]["get"]["responses"]
+                .as_object()
+                .map(serde_json::Map::len),
+            Some(2)
+        );
+        assert!(
+            paths["/health/ready"]["get"]["responses"]
+                .get("200")
+                .is_some()
+        );
+        assert!(
+            paths["/health/ready"]["get"]["responses"]
+                .get("503")
+                .is_some()
+        );
+        assert_eq!(
+            paths["/health/dependencies"]["get"]["responses"]
+                .as_object()
+                .map(serde_json::Map::len),
+            Some(2)
+        );
+        assert!(
+            paths["/health/dependencies"]["get"]["responses"]
+                .get("200")
+                .is_some()
+        );
+        assert!(
+            paths["/health/dependencies"]["get"]["responses"]
+                .get("403")
+                .is_some()
+        );
+        assert_eq!(
+            paths["/health/dependencies"]["get"]["parameters"][0]["name"],
+            "x-hsai-role"
+        );
         for path in [
             "/v1/settlement/mock/preflight",
             "/v1/settlement/mock/workflow",

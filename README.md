@@ -13,12 +13,15 @@ cursor-aware local observation, structured verification, evidence export,
 attestor quorum, finality, explicit HIP-4 binding, deterministic intents, and
 idempotent mock reconciliation are executable and tested. A local Docker
 candidate verifier is tested against a preloaded digest-pinned image, including
-bounded output, timeout, cleanup, and the complete TRUE-to-mock-settlement path;
-it is not production sandbox qualification. Safe materialization from an
-already-pinned local corpus checkout and inert special-object inspection are
-tested, but the system does not clone upstream repositories, retrieve LFS or
-submodule objects, extract archives, or materialize images. No live market has
-been created or settled. Testnet
+claim-bound environment identity, bounded output, timeout, cleanup, and the
+complete TRUE-to-mock-settlement path; it is not production sandbox
+qualification. Safe materialization from an already-pinned local corpus
+checkout, inert special-object inspection, and reviewed role-partitioned
+evaluation overlays are tested, but the system does not clone upstream
+repositories, retrieve LFS or submodule objects, extract archives, or
+materialize images. API liveness is process-only; readiness now fails closed
+without fresh fixed-schema dependency evidence. No live market has been created
+or settled. Testnet
 publishing is `UNSUPPORTED_UNVERIFIED`; mainnet mutation is structurally
 disabled.
 
@@ -54,8 +57,9 @@ pnpm run lint
 
 The opt-in local infrastructure gates require explicitly selected local
 dependencies. For Docker, preload the image and export
-`HSAI_TEST_OCI_IMAGE_REPOSITORY` and `HSAI_TEST_OCI_IMAGE_DIGEST`, then run
-`pnpm run verify:infra-oci`. The gate never pulls an image.
+`HSAI_TEST_OCI_IMAGE_REPOSITORY`, `HSAI_TEST_OCI_IMAGE_DIGEST`, and the explicit
+`HSAI_TEST_OCI_PLATFORM` (`linux/arm64` or `linux/amd64`), then run `pnpm run
+verify:infra-oci`. The gate never pulls an image.
 
 See [architecture](docs/outcomes/architecture.md), [HIP-4 status](docs/outcomes/hyperliquid-hip4.md),
 [limitations](docs/outcomes/limitations.md), and the [threat model](docs/threat-model.md).

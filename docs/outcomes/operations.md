@@ -21,6 +21,19 @@ The renderer does not provide an HTTP server, scrape authentication, TLS,
 process-wide aggregation, durable counter restoration, tracing, alerting, or
 retention; those transport and deployment controls remain production work.
 
+## Liveness and readiness
+
+`/health/live` reports only that the API process can respond. `/health/ready`
+evaluates a cached fixed-schema dependency snapshot against an injected clock on
+every request and returns HTTP 503 unless database schema, outbox, evidence
+store, signer registry, and required sources are all `READY` within the bounded
+freshness window. Provider failure, clock failure/regression, stale state, and
+`DEGRADED`, `UNAVAILABLE`, or `UNKNOWN` fail closed. The public response exposes
+only aggregate readiness. `/health/dependencies` is development-role-gated and
+exposes only the five fixed states and freshness class. Request handlers perform
+no blocking dependency probes. Production probe producers and IAM remain
+deployment work.
+
 ## Key rotation
 
 Add the new verifying key with an activation time, retain the old public key,

@@ -702,7 +702,7 @@ mod tests {
         .map_err(|error| std::io::Error::other(error.message))?;
         assert_eq!(
             output["schema_version"],
-            "hsai.local-corpus-materialization.v2"
+            "hsai.local-corpus-materialization.v3"
         );
         assert_eq!(output["executed_files"], false);
         assert_ne!(output["settlement_readiness"], "SETTLEMENT_READY");

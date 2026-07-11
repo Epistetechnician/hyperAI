@@ -555,7 +555,7 @@ mod tests {
     use super::*;
     use outcomes_runner::{
         CONTAINER_CANDIDATE_PATH, CONTAINER_VERIFIER_PATH, DockerVerificationRunner,
-        OciSandboxPolicy,
+        OciSandboxPolicy, docker_environment_digest,
     };
 
     #[test]
@@ -601,9 +601,10 @@ mod tests {
     #[ignore = "requires an explicitly selected preloaded local Alpine image"]
     fn external_docker_true_path_reaches_final_mock_settlement()
     -> Result<(), Box<dyn std::error::Error>> {
-        let (Ok(image_repository), Ok(image_digest)) = (
+        let (Ok(image_repository), Ok(image_digest), Ok(platform)) = (
             std::env::var("HSAI_TEST_OCI_IMAGE_REPOSITORY"),
             std::env::var("HSAI_TEST_OCI_IMAGE_DIGEST"),
+            std::env::var("HSAI_TEST_OCI_PLATFORM"),
         ) else {
             return Ok(());
         };
@@ -617,11 +618,15 @@ mod tests {
         draft.verification_policy.validator_artifact_digest =
             "1d7e49a5b5f6f72ea8a2b87812cea7d69ce0b7a0034094c7dacfebda4ed1c6dd".parse()?;
         draft.verification_policy.argv.clone_from(&argv);
+        draft.verification_policy.cpu_architecture = platform
+            .strip_prefix("linux/")
+            .unwrap_or(&platform)
+            .to_owned();
         draft.verification_policy.resource_limits.wall_clock_millis = 5_000;
-        let claim = draft.freeze()?;
         let policy = OciSandboxPolicy {
             image_repository,
             image_digest,
+            platform,
             user_id: 65_534,
             read_only_root: true,
             drop_all_capabilities: true,
@@ -635,6 +640,12 @@ mod tests {
             scratch_bytes: 4 * 1024 * 1024,
             timeout_millis: 5_000,
         };
+        draft.verification_policy.environment_digest = docker_environment_digest(
+            &policy,
+            &draft.verification_policy.locale,
+            &draft.verification_policy.timezone,
+        )?;
+        let claim = draft.freeze()?;
         let mut runner = DockerVerificationRunner::new(policy, expected.to_vec())?;
         let directory = tempfile::tempdir()?;
 

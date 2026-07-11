@@ -102,6 +102,14 @@ pub enum CorpusError {
         #[source]
         source: std::io::Error,
     },
+    /// A reviewed challenge overlay violated its hermetic compilation contract.
+    #[error("invalid reviewed overlay {overlay_id}: {reason}")]
+    InvalidOverlay {
+        /// Stable overlay identifier or fixture catalog boundary.
+        overlay_id: String,
+        /// Exact rejected invariant.
+        reason: String,
+    },
 }
 
 /// Hard resource ceilings for local corpus byte materialization.
@@ -156,6 +164,10 @@ pub struct LocalMaterializedFile {
     pub content_digest: Sha256Digest,
     /// Exact byte length read under the configured ceiling.
     pub byte_length: u64,
+    /// Conservative media type derived from bounded bytes and the normalized path.
+    pub media_type: String,
+    /// Whether an execute bit was observed on Unix; always false elsewhere.
+    pub executable: bool,
 }
 
 /// Special checkout object that cannot be treated as ordinary runnable bytes.
@@ -299,9 +311,199 @@ struct LocalCorpusMaterializationBody<'a> {
     executed_files: bool,
 }
 
-const LOCAL_MATERIALIZATION_SCHEMA_VERSION: &str = "hsai.local-corpus-materialization.v2";
+const LOCAL_MATERIALIZATION_SCHEMA_VERSION: &str = "hsai.local-corpus-materialization.v3";
 const MAX_GITMODULES_BYTES: usize = 64 * 1024;
 const MAX_LFS_POINTER_BYTES: usize = 1024;
+
+/// Complete role assigned to one materialized file by a reviewed overlay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ReviewedArtifactRole {
+    /// Bytes exposed to the solver.
+    SolverPublic,
+    /// Bytes available only to the isolated challenge runtime.
+    RuntimePrivate,
+    /// Bytes available only to the verifier.
+    VerifierOnly,
+    /// Organizer material excluded from all solver inputs.
+    ContaminationExcluded,
+    /// Inert build input; compilation does not execute it.
+    BuildInput,
+    /// Descriptive metadata that cannot affect resolution semantics.
+    DescriptiveMetadata,
+}
+
+/// Fail-closed state of a reviewed runtime or verifier declaration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ReviewedComponentStatus {
+    /// Required bytes or configuration are absent.
+    NotMaterialized,
+    /// Declaration is retained as inert metadata only.
+    MetadataOnly,
+    /// Review identified a typed or explained blocker.
+    Blocked,
+}
+
+/// One exact file assignment in a reviewed challenge overlay.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewedOverlayArtifact {
+    /// Checkout-relative normalized materialized path.
+    pub normalized_path: String,
+    /// Complete isolation role for this file.
+    pub role: ReviewedArtifactRole,
+    /// Exact media type expected from the digest-bound local scan.
+    pub expected_media_type: String,
+    /// Exact execute-bit expectation from the digest-bound local scan.
+    pub expected_executable: bool,
+}
+
+/// Item-level rights facts supplied by a reviewer without repository promotion.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewedItemRights {
+    /// Attribution strings retained with the challenge package.
+    pub upstream_attribution: Vec<String>,
+    /// Repository-level license fact, if known.
+    pub repository_license: Option<String>,
+    /// Challenge/item-level license or permission evidence, if known.
+    pub item_license: Option<String>,
+    /// Conservative item-level rights status.
+    pub rights_status: RightsStatus,
+    /// Whether redistribution was explicitly established at item level.
+    pub redistribution_allowed: bool,
+    /// Whether local execution was explicitly established at item level.
+    pub execution_allowed: bool,
+    /// Whether commercial market use was explicitly established at item level.
+    pub commercial_market_use_allowed: bool,
+    /// Exact limitation or missing-evidence statement.
+    pub exact_limitation: String,
+}
+
+/// Versioned reviewed overlay bound to one local materialization identity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewedChallengeOverlay {
+    /// Overlay schema version.
+    pub schema_version: String,
+    /// Stable reviewed overlay identifier.
+    pub overlay_id: String,
+    /// Matching corpus profile.
+    pub profile_id: String,
+    /// Matching immutable commit.
+    pub pinned_commit: String,
+    /// Matching allowlisted materialization root.
+    pub materialization_root: String,
+    /// Exact digest of the source local materialization.
+    pub source_materialization_digest: Sha256Digest,
+    /// Stable challenge reference within the profile.
+    pub challenge_ref: String,
+    /// Normalized challenge category.
+    pub category: String,
+    /// Original upstream category label retained as descriptive metadata.
+    pub original_category: String,
+    /// Complete one-to-one partition of every materialized file.
+    pub artifacts: Vec<ReviewedOverlayArtifact>,
+    /// Runtime declaration ceiling.
+    pub runtime_status: ReviewedComponentStatus,
+    /// Exact runtime blocker or metadata-only explanation.
+    pub runtime_limitation: String,
+    /// Verifier declaration ceiling.
+    pub verifier_status: ReviewedComponentStatus,
+    /// Exact verifier blocker or metadata-only explanation.
+    pub verifier_limitation: String,
+    /// Item-level rights facts.
+    pub rights: ReviewedItemRights,
+    /// Structural evaluation/catalog ceiling.
+    pub readiness: SettlementReadiness,
+}
+
+/// Bundled sanitized reviewed-overlay fixture catalog.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewedOverlayCatalog {
+    /// Catalog schema version.
+    pub schema_version: String,
+    /// Sanitized reviewed overlays.
+    pub overlays: Vec<ReviewedChallengeOverlay>,
+}
+
+/// Digest-bound artifact emitted by reviewed-overlay compilation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompiledReviewedArtifact {
+    /// Checkout-relative normalized path.
+    pub normalized_path: String,
+    /// Source byte digest.
+    pub content_digest: Sha256Digest,
+    /// Exact byte length.
+    pub byte_length: u64,
+    /// Conservative detected media type.
+    pub media_type: String,
+    /// Observed execute-bit state.
+    pub executable: bool,
+    /// Reviewed isolation role.
+    pub role: ReviewedArtifactRole,
+}
+
+/// Solver-visible subset and excluded digests for a compiled overlay.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompiledReviewedSolverView {
+    /// Solver-view schema version.
+    pub schema_version: String,
+    /// Source materialization identity.
+    pub source_materialization_digest: Sha256Digest,
+    /// Solver-visible artifacts in deterministic path order.
+    pub exposed_artifacts: Vec<CompiledReviewedArtifact>,
+    /// All non-solver artifact digests in deterministic path order.
+    pub excluded_artifact_digests: Vec<Sha256Digest>,
+    /// Canonical solver-view digest.
+    pub manifest_digest: Sha256Digest,
+}
+
+/// Hermetic evaluation package produced from a reviewed overlay.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompiledReviewedChallengePackage {
+    /// Package schema version.
+    pub schema_version: String,
+    /// Reviewed overlay identifier.
+    pub overlay_id: String,
+    /// Canonical digest of the reviewed overlay input.
+    pub overlay_digest: Sha256Digest,
+    /// Source local materialization identity.
+    pub source_materialization_digest: Sha256Digest,
+    /// Stable challenge reference.
+    pub challenge_ref: String,
+    /// Normalized category.
+    pub category: String,
+    /// Original upstream category label.
+    pub original_category: String,
+    /// Completely partitioned artifact list.
+    pub artifacts: Vec<CompiledReviewedArtifact>,
+    /// Digest-bound solver-view subset.
+    pub solver_view: CompiledReviewedSolverView,
+    /// Inherited unresolved special-object blockers.
+    pub inherited_special_blockers: Vec<SpecialObjectReadinessBlocker>,
+    /// Runtime status; compilation never runs it.
+    pub runtime_status: ReviewedComponentStatus,
+    /// Exact runtime limitation.
+    pub runtime_limitation: String,
+    /// Verifier status; compilation never runs it.
+    pub verifier_status: ReviewedComponentStatus,
+    /// Exact verifier limitation.
+    pub verifier_limitation: String,
+    /// Conservative item-level rights facts.
+    pub rights: ReviewedItemRights,
+    /// Canonical rights record digest.
+    pub rights_digest: Sha256Digest,
+    /// Structural evaluation/catalog ceiling.
+    pub readiness: SettlementReadiness,
+    /// Canonical package digest.
+    pub package_digest: Sha256Digest,
+}
 
 /// Machine-readable catalog of reviewed generic-Git manifest profiles.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -522,7 +724,7 @@ pub fn materialize_pinned_local_root(
         settlement_readiness: &profile.readiness,
         executed_files: false,
     };
-    let manifest_digest = domain_separated_digest("hsai.local-corpus-materialization.v2", &body)?;
+    let manifest_digest = domain_separated_digest("hsai.local-corpus-materialization.v3", &body)?;
     Ok(LocalCorpusMaterialization {
         schema_version: LOCAL_MATERIALIZATION_SCHEMA_VERSION.to_owned(),
         profile_id: profile.profile_id.clone(),
@@ -709,13 +911,70 @@ fn scan_regular_materialization_file(
         &mut scan.special_objects,
     )?;
     let digest: [u8; 32] = Sha256::digest(&bytes).into();
+    let media_type = conservative_media_type(&normalized_path, &bytes);
+    let executable = observed_executable(metadata);
     scan.files.push(LocalMaterializedFile {
         normalized_path,
         content_digest: Sha256Digest::from_bytes(digest),
         byte_length: metadata.len(),
+        media_type,
+        executable,
     });
     scan.total_bytes = next_total;
     Ok(())
+}
+
+fn conservative_media_type(normalized_path: &str, bytes: &[u8]) -> String {
+    let filename = normalized_path
+        .rsplit('/')
+        .next()
+        .unwrap_or(normalized_path);
+    let lower = filename.to_ascii_lowercase();
+    if bytes.starts_with(b"version https://git-lfs.github.com/spec/v1") {
+        return "application/vnd.git-lfs.pointer".to_owned();
+    }
+    if bytes.starts_with(b"PK\x03\x04") || bytes.starts_with(b"PK\x05\x06") {
+        return "application/zip".to_owned();
+    }
+    if bytes.starts_with(&[0x1f, 0x8b]) {
+        return "application/gzip".to_owned();
+    }
+    if bytes.starts_with(b"BZh") {
+        return "application/x-bzip2".to_owned();
+    }
+    if bytes.starts_with(&[0xfd, b'7', b'z', b'X', b'Z', 0x00]) {
+        return "application/x-xz".to_owned();
+    }
+    if bytes.len() > 262 && bytes.get(257..262) == Some(b"ustar") {
+        return "application/x-tar".to_owned();
+    }
+    if std::str::from_utf8(bytes).is_err() {
+        return "application/octet-stream".to_owned();
+    }
+    if dockerfile_name(filename) {
+        "text/x-dockerfile".to_owned()
+    } else {
+        match lower.rsplit('.').next() {
+            Some("md" | "markdown") => "text/markdown".to_owned(),
+            Some("json") if serde_json::from_slice::<serde_json::Value>(bytes).is_ok() => {
+                "application/json".to_owned()
+            }
+            Some("yaml" | "yml") => "application/yaml".to_owned(),
+            Some("toml") => "application/toml".to_owned(),
+            _ => "text/plain".to_owned(),
+        }
+    }
+}
+
+#[cfg(unix)]
+fn observed_executable(metadata: &fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt as _;
+    metadata.permissions().mode() & 0o111 != 0
+}
+
+#[cfg(not(unix))]
+fn observed_executable(_metadata: &fs::Metadata) -> bool {
+    false
 }
 
 fn inspect_special_file(
@@ -1340,6 +1599,423 @@ fn safe_normalized_path(path: &str) -> bool {
         && !path.split('/').any(|component| component == "..")
 }
 
+/// Load the sanitized reviewed-overlay fixture catalog.
+///
+/// # Errors
+///
+/// Returns an error for invalid JSON, an unsupported schema, duplicate or
+/// empty overlay IDs, or an empty fixture catalog. Loading is compile-time
+/// local and performs no network or filesystem discovery.
+pub fn bundled_reviewed_overlay_fixtures() -> Result<ReviewedOverlayCatalog, CorpusError> {
+    let catalog: ReviewedOverlayCatalog = serde_json::from_str(include_str!(
+        "../../../fixtures/corpora/recorded-challenge-overlays.json"
+    ))?;
+    if catalog.schema_version != "hsai.reviewed-overlay-catalog.v1" || catalog.overlays.is_empty() {
+        return Err(CorpusError::InvalidOverlay {
+            overlay_id: "fixture-catalog".to_owned(),
+            reason: "unsupported schema version or empty catalog".to_owned(),
+        });
+    }
+    let mut ids = std::collections::BTreeSet::new();
+    if catalog
+        .overlays
+        .iter()
+        .any(|overlay| overlay.overlay_id.is_empty() || !ids.insert(overlay.overlay_id.as_str()))
+    {
+        return Err(CorpusError::InvalidOverlay {
+            overlay_id: "fixture-catalog".to_owned(),
+            reason: "overlay IDs must be non-empty and unique".to_owned(),
+        });
+    }
+    Ok(catalog)
+}
+
+#[derive(Serialize)]
+struct ReviewedSolverViewBody<'a> {
+    schema_version: &'a str,
+    source_materialization_digest: Sha256Digest,
+    exposed_artifacts: &'a [CompiledReviewedArtifact],
+    excluded_artifact_digests: &'a [Sha256Digest],
+}
+
+#[derive(Serialize)]
+struct CompiledReviewedPackageBody<'a> {
+    schema_version: &'a str,
+    overlay_id: &'a str,
+    overlay_digest: Sha256Digest,
+    source_materialization_digest: Sha256Digest,
+    challenge_ref: &'a str,
+    category: &'a str,
+    original_category: &'a str,
+    artifacts: &'a [CompiledReviewedArtifact],
+    solver_view_manifest_digest: Sha256Digest,
+    inherited_special_blockers: &'a [SpecialObjectReadinessBlocker],
+    runtime_status: ReviewedComponentStatus,
+    runtime_limitation: &'a str,
+    verifier_status: ReviewedComponentStatus,
+    verifier_limitation: &'a str,
+    rights_digest: Sha256Digest,
+    readiness: SettlementReadiness,
+}
+
+/// Compile a complete reviewed overlay against one digest-bound local scan.
+///
+/// Compilation is pure validation and canonical hashing. It performs no
+/// network access, object retrieval, extraction, execution, or readiness
+/// promotion.
+///
+/// # Errors
+///
+/// Returns an error for identity disagreement, incomplete or overlapping path
+/// assignment, solver-view exposure, media/executable mismatch, unsafe rights
+/// promotion, invalid component limitations, or a readiness value outside the
+/// evaluation/catalog ceiling.
+pub fn compile_reviewed_overlay(
+    materialization: &LocalCorpusMaterialization,
+    overlay: &ReviewedChallengeOverlay,
+) -> Result<CompiledReviewedChallengePackage, CorpusError> {
+    validate_overlay_identity(materialization, overlay)?;
+    validate_reviewed_rights(overlay)?;
+    validate_overlay_status(materialization, overlay)?;
+    let compiled = compile_reviewed_artifacts(materialization, overlay)?;
+    let solver_view = compile_reviewed_solver_view(materialization, overlay, &compiled)?;
+    let overlay_digest = domain_separated_digest("hsai.reviewed-challenge-overlay.v1", overlay)?;
+    let rights_digest = domain_separated_digest("hsai.reviewed-item-rights.v1", &overlay.rights)?;
+    let body = CompiledReviewedPackageBody {
+        schema_version: "hsai.compiled-reviewed-challenge-package.v1",
+        overlay_id: &overlay.overlay_id,
+        overlay_digest,
+        source_materialization_digest: materialization.manifest_digest,
+        challenge_ref: &overlay.challenge_ref,
+        category: &overlay.category,
+        original_category: &overlay.original_category,
+        artifacts: &compiled,
+        solver_view_manifest_digest: solver_view.manifest_digest,
+        inherited_special_blockers: &materialization.readiness_blockers,
+        runtime_status: overlay.runtime_status,
+        runtime_limitation: &overlay.runtime_limitation,
+        verifier_status: overlay.verifier_status,
+        verifier_limitation: &overlay.verifier_limitation,
+        rights_digest,
+        readiness: overlay.readiness,
+    };
+    let package_digest =
+        domain_separated_digest("hsai.compiled-reviewed-challenge-package.v1", &body)?;
+    Ok(CompiledReviewedChallengePackage {
+        schema_version: "hsai.compiled-reviewed-challenge-package.v1".to_owned(),
+        overlay_id: overlay.overlay_id.clone(),
+        overlay_digest,
+        source_materialization_digest: materialization.manifest_digest,
+        challenge_ref: overlay.challenge_ref.clone(),
+        category: overlay.category.clone(),
+        original_category: overlay.original_category.clone(),
+        artifacts: compiled,
+        solver_view,
+        inherited_special_blockers: materialization.readiness_blockers.clone(),
+        runtime_status: overlay.runtime_status,
+        runtime_limitation: overlay.runtime_limitation.clone(),
+        verifier_status: overlay.verifier_status,
+        verifier_limitation: overlay.verifier_limitation.clone(),
+        rights: overlay.rights.clone(),
+        rights_digest,
+        readiness: overlay.readiness,
+        package_digest,
+    })
+}
+
+fn compile_reviewed_artifacts(
+    materialization: &LocalCorpusMaterialization,
+    overlay: &ReviewedChallengeOverlay,
+) -> Result<Vec<CompiledReviewedArtifact>, CorpusError> {
+    let mut assignments = BTreeMap::new();
+    for assignment in &overlay.artifacts {
+        validate_normalized_relative_path(&assignment.normalized_path, false).map_err(
+            |reason| {
+                overlay_error(
+                    overlay,
+                    format!(
+                        "unsafe artifact path {}: {reason}",
+                        assignment.normalized_path
+                    ),
+                )
+            },
+        )?;
+        if assignments
+            .insert(assignment.normalized_path.as_str(), assignment)
+            .is_some()
+        {
+            return Err(overlay_error(
+                overlay,
+                format!(
+                    "duplicate artifact assignment {}",
+                    assignment.normalized_path
+                ),
+            ));
+        }
+    }
+    if assignments.len() != materialization.files.len() {
+        return Err(overlay_error(
+            overlay,
+            "overlay must classify every materialized file exactly once".to_owned(),
+        ));
+    }
+
+    let mut compiled = Vec::with_capacity(materialization.files.len());
+    for file in &materialization.files {
+        let assignment = assignments
+            .get(file.normalized_path.as_str())
+            .ok_or_else(|| {
+                overlay_error(
+                    overlay,
+                    format!(
+                        "materialized path is unclassified: {}",
+                        file.normalized_path
+                    ),
+                )
+            })?;
+        validate_overlay_artifact(file, assignment, overlay)?;
+        compiled.push(CompiledReviewedArtifact {
+            normalized_path: file.normalized_path.clone(),
+            content_digest: file.content_digest,
+            byte_length: file.byte_length,
+            media_type: file.media_type.clone(),
+            executable: file.executable,
+            role: assignment.role,
+        });
+    }
+    compiled.sort_by(|left, right| left.normalized_path.cmp(&right.normalized_path));
+    if assignments.keys().any(|path| {
+        materialization
+            .files
+            .iter()
+            .all(|file| file.normalized_path != *path)
+    }) {
+        return Err(overlay_error(
+            overlay,
+            "overlay assigns a path absent from the materialization".to_owned(),
+        ));
+    }
+
+    Ok(compiled)
+}
+
+fn validate_overlay_identity(
+    materialization: &LocalCorpusMaterialization,
+    overlay: &ReviewedChallengeOverlay,
+) -> Result<(), CorpusError> {
+    let body = LocalCorpusMaterializationBody {
+        schema_version: &materialization.schema_version,
+        profile_id: &materialization.profile_id,
+        pinned_commit: &materialization.pinned_commit,
+        materialization_root: &materialization.materialization_root,
+        files: &materialization.files,
+        total_bytes: materialization.total_bytes,
+        special_objects: &materialization.special_objects,
+        readiness_blockers: &materialization.readiness_blockers,
+        settlement_readiness: &materialization.settlement_readiness,
+        executed_files: materialization.executed_files,
+    };
+    let recomputed = domain_separated_digest("hsai.local-corpus-materialization.v3", &body)?;
+    let reason = if overlay.schema_version != "hsai.reviewed-challenge-overlay.v1" {
+        Some("unsupported overlay schema version")
+    } else if materialization.schema_version != LOCAL_MATERIALIZATION_SCHEMA_VERSION {
+        Some("unsupported source materialization schema version")
+    } else if overlay.overlay_id.is_empty()
+        || overlay.challenge_ref.is_empty()
+        || overlay.category.is_empty()
+        || overlay.original_category.is_empty()
+    {
+        Some("overlay identity and taxonomy fields must be non-empty")
+    } else if overlay.profile_id != materialization.profile_id {
+        Some("profile ID does not match source materialization")
+    } else if overlay.pinned_commit != materialization.pinned_commit {
+        Some("pinned commit does not match source materialization")
+    } else if overlay.materialization_root != materialization.materialization_root {
+        Some("materialization root does not match source materialization")
+    } else if overlay.source_materialization_digest != materialization.manifest_digest {
+        Some("source materialization digest does not match")
+    } else if recomputed != materialization.manifest_digest {
+        Some("source materialization body does not match its digest")
+    } else if materialization.executed_files {
+        Some("executed source materializations are forbidden")
+    } else {
+        None
+    };
+    reason.map_or(Ok(()), |reason| {
+        Err(overlay_error(overlay, reason.to_owned()))
+    })
+}
+
+fn validate_overlay_status(
+    materialization: &LocalCorpusMaterialization,
+    overlay: &ReviewedChallengeOverlay,
+) -> Result<(), CorpusError> {
+    if !matches!(
+        overlay.readiness,
+        SettlementReadiness::EvaluationOnly | SettlementReadiness::CatalogOnly
+    ) {
+        return Err(overlay_error(
+            overlay,
+            "reviewed overlays are structurally limited to EVALUATION_ONLY or CATALOG_ONLY"
+                .to_owned(),
+        ));
+    }
+    if !matches!(
+        materialization.settlement_readiness,
+        SettlementReadiness::EvaluationOnly | SettlementReadiness::CatalogOnly
+    ) || (materialization.settlement_readiness == SettlementReadiness::CatalogOnly
+        && overlay.readiness != SettlementReadiness::CatalogOnly)
+    {
+        return Err(overlay_error(
+            overlay,
+            "overlay cannot promote the source materialization readiness ceiling".to_owned(),
+        ));
+    }
+    if overlay.runtime_limitation.trim().is_empty() || overlay.verifier_limitation.trim().is_empty()
+    {
+        return Err(overlay_error(
+            overlay,
+            "runtime and verifier limitations must be explicit".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_reviewed_rights(overlay: &ReviewedChallengeOverlay) -> Result<(), CorpusError> {
+    let rights = &overlay.rights;
+    if rights.upstream_attribution.is_empty()
+        || rights
+            .upstream_attribution
+            .iter()
+            .any(|attribution| attribution.trim().is_empty())
+        || rights.exact_limitation.trim().is_empty()
+        || rights.item_license.as_deref().is_some_and(str::is_empty)
+    {
+        return Err(overlay_error(
+            overlay,
+            "item rights require attribution and an exact non-empty limitation".to_owned(),
+        ));
+    }
+    if rights.item_license.is_none()
+        && (rights.rights_status == RightsStatus::Permitted
+            || rights.redistribution_allowed
+            || rights.execution_allowed
+            || rights.commercial_market_use_allowed)
+    {
+        return Err(overlay_error(
+            overlay,
+            "repository license cannot promote missing item-level permission".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_overlay_artifact(
+    file: &LocalMaterializedFile,
+    assignment: &ReviewedOverlayArtifact,
+    overlay: &ReviewedChallengeOverlay,
+) -> Result<(), CorpusError> {
+    if assignment.expected_media_type != file.media_type {
+        return Err(overlay_error(
+            overlay,
+            format!(
+                "media type mismatch for {}: expected {}, observed {}",
+                file.normalized_path, assignment.expected_media_type, file.media_type
+            ),
+        ));
+    }
+    if assignment.expected_executable != file.executable {
+        return Err(overlay_error(
+            overlay,
+            format!("executable-bit mismatch for {}", file.normalized_path),
+        ));
+    }
+    if assignment.role == ReviewedArtifactRole::SolverPublic
+        && solver_sensitive_path(&file.normalized_path)
+    {
+        return Err(overlay_error(
+            overlay,
+            format!(
+                "solver-public role exposes sensitive path {}",
+                file.normalized_path
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn compile_reviewed_solver_view(
+    materialization: &LocalCorpusMaterialization,
+    overlay: &ReviewedChallengeOverlay,
+    artifacts: &[CompiledReviewedArtifact],
+) -> Result<CompiledReviewedSolverView, CorpusError> {
+    let exposed_artifacts = artifacts
+        .iter()
+        .filter(|artifact| artifact.role == ReviewedArtifactRole::SolverPublic)
+        .cloned()
+        .collect::<Vec<_>>();
+    if exposed_artifacts.is_empty() {
+        return Err(overlay_error(
+            overlay,
+            "solver view must expose at least one reviewed public artifact".to_owned(),
+        ));
+    }
+    let excluded_artifact_digests = artifacts
+        .iter()
+        .filter(|artifact| artifact.role != ReviewedArtifactRole::SolverPublic)
+        .map(|artifact| artifact.content_digest)
+        .collect::<Vec<_>>();
+    let exposed_digests = exposed_artifacts
+        .iter()
+        .map(|artifact| artifact.content_digest)
+        .collect::<std::collections::HashSet<_>>();
+    if excluded_artifact_digests
+        .iter()
+        .any(|digest| exposed_digests.contains(digest))
+    {
+        return Err(overlay_error(
+            overlay,
+            "solver-visible content digest overlaps an excluded artifact".to_owned(),
+        ));
+    }
+    let body = ReviewedSolverViewBody {
+        schema_version: "hsai.compiled-reviewed-solver-view.v1",
+        source_materialization_digest: materialization.manifest_digest,
+        exposed_artifacts: &exposed_artifacts,
+        excluded_artifact_digests: &excluded_artifact_digests,
+    };
+    let manifest_digest = domain_separated_digest("hsai.compiled-reviewed-solver-view.v1", &body)?;
+    Ok(CompiledReviewedSolverView {
+        schema_version: "hsai.compiled-reviewed-solver-view.v1".to_owned(),
+        source_materialization_digest: materialization.manifest_digest,
+        exposed_artifacts,
+        excluded_artifact_digests,
+        manifest_digest,
+    })
+}
+
+fn solver_sensitive_path(path: &str) -> bool {
+    path.split('/').any(|component| {
+        let lower = component.to_ascii_lowercase();
+        let stem = lower.split('.').next().unwrap_or(&lower);
+        matches!(lower.as_str(), "private" | "verifier" | "server_files")
+            || matches!(
+                stem,
+                "flag" | "solution" | "solutions" | "solve" | "writeup" | "writeups"
+            )
+            || stem.starts_with("flag_")
+            || stem.starts_with("solution_")
+            || stem.starts_with("writeup_")
+    })
+}
+
+fn overlay_error(overlay: &ReviewedChallengeOverlay, reason: String) -> CorpusError {
+    CorpusError::InvalidOverlay {
+        overlay_id: overlay.overlay_id.clone(),
+        reason,
+    }
+}
+
 /// Versioned port for immutable challenge corpus materialization.
 // Each fallible method returns the adapter-specific `CorpusError`; concrete
 // implementations document their narrower failure conditions.
@@ -1759,6 +2435,25 @@ mod tests {
         Ok(())
     }
 
+    fn checked_in_reviewed_overlay_inputs()
+    -> Result<(LocalCorpusMaterialization, ReviewedChallengeOverlay), Box<dyn std::error::Error>>
+    {
+        let profiles = bundled_corpus_profiles()?;
+        let root = checked_in_materialization_root()?;
+        let request = local_request(
+            &root,
+            "development/special-object-inspection",
+            LocalMaterializationLimits::default(),
+        );
+        let materialization = materialize_pinned_local_root(&profiles, &request)?;
+        let overlay = bundled_reviewed_overlay_fixtures()?
+            .overlays
+            .into_iter()
+            .next()
+            .ok_or("reviewed overlay fixture is absent")?;
+        Ok((materialization, overlay))
+    }
+
     #[test]
     fn contract_local_materialization_is_deterministic_and_non_settlement_ready()
     -> Result<(), Box<dyn std::error::Error>> {
@@ -2013,7 +2708,7 @@ mod tests {
         let first = materialize_pinned_local_root(&catalog, &request)?;
         let second = materialize_pinned_local_root(&catalog, &request)?;
         assert_eq!(first, second);
-        assert_eq!(first.schema_version, "hsai.local-corpus-materialization.v2");
+        assert_eq!(first.schema_version, "hsai.local-corpus-materialization.v3");
         assert_eq!(first.special_objects.len(), 4);
         assert_eq!(first.readiness_blockers.len(), 5);
         assert_eq!(
@@ -2184,6 +2879,169 @@ mod tests {
             materialize_pinned_local_root(&catalog, &request),
             Err(CorpusError::UnsafeMaterializationPath { reason, .. })
                 if reason.contains("control characters")
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn contract_checked_in_reviewed_overlay_compiles_without_fixture_rewrite()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (materialization, overlay) = checked_in_reviewed_overlay_inputs()?;
+        assert_eq!(
+            overlay.source_materialization_digest, materialization.manifest_digest,
+            "replace the checked-in digest with {}",
+            materialization.manifest_digest
+        );
+        let first = compile_reviewed_overlay(&materialization, &overlay)?;
+        let second = compile_reviewed_overlay(&materialization, &overlay)?;
+        assert_eq!(first, second);
+        assert_eq!(first.artifacts.len(), materialization.files.len());
+        assert_eq!(first.solver_view.exposed_artifacts.len(), 1);
+        assert_eq!(first.readiness, SettlementReadiness::EvaluationOnly);
+        assert_eq!(
+            first.inherited_special_blockers,
+            materialization.readiness_blockers
+        );
+        assert!(!first.inherited_special_blockers.is_empty());
+        assert_eq!(first.rights.rights_status, RightsStatus::Restricted);
+        assert!(first.rights.item_license.is_none());
+        assert!(!first.rights.redistribution_allowed);
+        assert!(!first.rights.execution_allowed);
+        assert!(!first.rights.commercial_market_use_allowed);
+        Ok(())
+    }
+
+    #[test]
+    fn contract_reviewed_overlay_schema_denies_unknown_fields()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut value: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../fixtures/corpora/recorded-challenge-overlays.json"
+        ))?;
+        value["overlays"][0]["unreviewed_extra"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<ReviewedOverlayCatalog>(value).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn contract_reviewed_overlay_rejects_identity_drift_and_incomplete_partition()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (materialization, overlay) = checked_in_reviewed_overlay_inputs()?;
+        let mut wrong_digest = overlay.clone();
+        wrong_digest.source_materialization_digest = Sha256Digest::from_bytes([9; 32]);
+        assert!(matches!(
+            compile_reviewed_overlay(&materialization, &wrong_digest),
+            Err(CorpusError::InvalidOverlay { reason, .. })
+                if reason.contains("materialization digest")
+        ));
+
+        let mut incomplete = overlay.clone();
+        incomplete.artifacts.pop();
+        assert!(matches!(
+            compile_reviewed_overlay(&materialization, &incomplete),
+            Err(CorpusError::InvalidOverlay { reason, .. })
+                if reason.contains("classify every materialized file")
+        ));
+
+        let mut duplicate = overlay;
+        duplicate.artifacts[1] = duplicate.artifacts[0].clone();
+        assert!(matches!(
+            compile_reviewed_overlay(&materialization, &duplicate),
+            Err(CorpusError::InvalidOverlay { reason, .. })
+                if reason.contains("duplicate artifact assignment")
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn contract_reviewed_overlay_rejects_media_and_executable_mismatch()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (materialization, overlay) = checked_in_reviewed_overlay_inputs()?;
+        let mut wrong_media = overlay.clone();
+        wrong_media.artifacts[0].expected_media_type = "application/zip".to_owned();
+        assert!(matches!(
+            compile_reviewed_overlay(&materialization, &wrong_media),
+            Err(CorpusError::InvalidOverlay { reason, .. })
+                if reason.contains("media type mismatch")
+        ));
+
+        let mut wrong_mode = overlay;
+        wrong_mode.artifacts[0].expected_executable = true;
+        assert!(matches!(
+            compile_reviewed_overlay(&materialization, &wrong_mode),
+            Err(CorpusError::InvalidOverlay { reason, .. })
+                if reason.contains("executable-bit mismatch")
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn contract_reviewed_overlay_prevents_repository_license_and_readiness_promotion()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (materialization, overlay) = checked_in_reviewed_overlay_inputs()?;
+        let mut promoted_rights = overlay.clone();
+        promoted_rights.rights.rights_status = RightsStatus::Permitted;
+        promoted_rights.rights.redistribution_allowed = true;
+        assert!(matches!(
+            compile_reviewed_overlay(&materialization, &promoted_rights),
+            Err(CorpusError::InvalidOverlay { reason, .. })
+                if reason.contains("repository license cannot promote")
+        ));
+
+        let mut settlement_ready = overlay;
+        settlement_ready.readiness = SettlementReadiness::SettlementReady;
+        assert!(matches!(
+            compile_reviewed_overlay(&materialization, &settlement_ready),
+            Err(CorpusError::InvalidOverlay { reason, .. })
+                if reason.contains("structurally limited")
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn contract_reviewed_solver_view_rejects_digest_alias_with_excluded_content()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let checkout = tempfile::tempdir()?;
+        write_test_tree(
+            checkout.path(),
+            &[
+                ("public.txt", b"same bytes"),
+                ("runtime.txt", b"same bytes"),
+            ],
+        )?;
+        let profiles = bundled_corpus_profiles()?;
+        let request = LocalMaterializationRequest {
+            profile_id: "cryptohack-ctf-archive",
+            checkout_root: checkout.path(),
+            materialization_root: ".",
+            expected_commit: CRYPTOHACK_PIN,
+            observed_checkout_commit: CRYPTOHACK_PIN,
+            limits: LocalMaterializationLimits::default(),
+        };
+        let materialization = materialize_pinned_local_root(&profiles, &request)?;
+        let (_, mut overlay) = checked_in_reviewed_overlay_inputs()?;
+        overlay.overlay_id = "overlay_digest_alias_test".to_owned();
+        overlay.profile_id = "cryptohack-ctf-archive".to_owned();
+        overlay.pinned_commit = CRYPTOHACK_PIN.to_owned();
+        overlay.materialization_root = ".".to_owned();
+        overlay.source_materialization_digest = materialization.manifest_digest;
+        overlay.artifacts = vec![
+            ReviewedOverlayArtifact {
+                normalized_path: "public.txt".to_owned(),
+                role: ReviewedArtifactRole::SolverPublic,
+                expected_media_type: "text/plain".to_owned(),
+                expected_executable: false,
+            },
+            ReviewedOverlayArtifact {
+                normalized_path: "runtime.txt".to_owned(),
+                role: ReviewedArtifactRole::RuntimePrivate,
+                expected_media_type: "text/plain".to_owned(),
+                expected_executable: false,
+            },
+        ];
+        assert!(matches!(
+            compile_reviewed_overlay(&materialization, &overlay),
+            Err(CorpusError::InvalidOverlay { reason, .. })
+                if reason.contains("overlaps an excluded artifact")
         ));
         Ok(())
     }

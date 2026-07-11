@@ -1,0 +1,65 @@
+{
+  "schema_version": "hsai.reviewed-overlay-catalog.v1",
+  "overlays": [
+    {
+      "schema_version": "hsai.reviewed-challenge-overlay.v1",
+      "overlay_id": "overlay_recorded_special_objects_v1",
+      "profile_id": "nyu-ctf-bench",
+      "pinned_commit": "4c5744f55a31a58e03d6118c9dbb1c18e5bbdfa9",
+      "materialization_root": "development/special-object-inspection",
+      "source_materialization_digest": "0bc3a9a3ad9e62102379ea40064c2ef27c4a593c04b2c2bb7f7f1698f8d5ad00",
+      "challenge_ref": "recorded/special-object-inspection",
+      "category": "misc",
+      "original_category": "recorded-fixture",
+      "artifacts": [
+        {
+          "normalized_path": "development/special-object-inspection/.gitmodules",
+          "role": "BUILD_INPUT",
+          "expected_media_type": "text/plain",
+          "expected_executable": false
+        },
+        {
+          "normalized_path": "development/special-object-inspection/assets/payload.bin",
+          "role": "BUILD_INPUT",
+          "expected_media_type": "application/vnd.git-lfs.pointer",
+          "expected_executable": false
+        },
+        {
+          "normalized_path": "development/special-object-inspection/bundles/recorded.zip",
+          "role": "BUILD_INPUT",
+          "expected_media_type": "text/plain",
+          "expected_executable": false
+        },
+        {
+          "normalized_path": "development/special-object-inspection/runtime/Dockerfile",
+          "role": "BUILD_INPUT",
+          "expected_media_type": "text/x-dockerfile",
+          "expected_executable": false
+        },
+        {
+          "normalized_path": "development/special-object-inspection/runtime/public.txt",
+          "role": "SOLVER_PUBLIC",
+          "expected_media_type": "text/plain",
+          "expected_executable": false
+        }
+      ],
+      "runtime_status": "METADATA_ONLY",
+      "runtime_limitation": "recorded Dockerfile is inert metadata and its base image is not materialized or executed",
+      "verifier_status": "NOT_MATERIALIZED",
+      "verifier_limitation": "no reviewed deterministic verifier bytes are present in the sanitized fixture",
+      "rights": {
+        "upstream_attribution": [
+          "sanitized HSAI fixture shaped for the pinned NYU CTF Bench profile"
+        ],
+        "repository_license": "GPL-2.0 repository-level fact",
+        "item_license": null,
+        "rights_status": "RESTRICTED",
+        "redistribution_allowed": false,
+        "execution_allowed": false,
+        "commercial_market_use_allowed": false,
+        "exact_limitation": "sanitized local fixture only; no item-level upstream permission or executable verifier is asserted"
+      },
+      "readiness": "EVALUATION_ONLY"
+    }
+  ]
+}

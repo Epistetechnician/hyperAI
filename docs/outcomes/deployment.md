@@ -16,6 +16,11 @@ database schema, outbox, evidence store, signer registry, and required source
 adapters. An external-source outage must make dependent work not-ready without
 making existing immutable public evidence unavailable.
 
+The implemented API evaluates cached fixed-schema dependency state on each
+request. Its default composition is unconfigured and returns not-ready. A
+deployment must inject non-blocking snapshot and clock providers; real database,
+object-store, signer, and source probes run outside request handlers.
+
 `.env.example` contains placeholders only. Private keys must never be passed on
 the CLI, stored in environment files, or logged. Mainnet write configuration has
 no supported code path.
@@ -27,14 +32,17 @@ database without changing the default hermetic gate:
 HSAI_TEST_POSTGRES_URL=postgres://... pnpm run verify:infra-postgres
 ```
 
-The Docker control-plane probe requires an already-present immutable image and
-does not fetch, mount, network, or execute candidate content:
+The Docker infrastructure gate requires an already-present immutable image and
+never pulls it. It runs the effect-free control-plane probe plus local verifier
+PASS/FAIL, timeout, output-flood cleanup, and two-replay mock-settlement
+acceptance:
 
 ```sh
 HSAI_TEST_OCI_IMAGE_REPOSITORY=alpine \
 HSAI_TEST_OCI_IMAGE_DIGEST=sha256:... \
+HSAI_TEST_OCI_PLATFORM=linux/arm64 \
 pnpm run verify:infra-oci
 ```
 
-Passing this probe establishes daemon control enforcement, not production
-candidate-verifier readiness.
+Passing this gate establishes the tested local verifier and claim-bound Docker
+environment contract, not production hostile-code sandbox qualification.

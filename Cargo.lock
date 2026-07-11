@@ -1513,6 +1513,7 @@ name = "outcomes-runner"
 version = "0.1.0"
 dependencies = [
  "outcomes-domain",
+ "serde",
  "serde_json",
  "sha2 0.11.0",
  "tempfile",

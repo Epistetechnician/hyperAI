@@ -26,14 +26,16 @@ architecture therefore follows the prompt's Rust greenfield branch.
 - [x] Phase 5 local surface: machine-readable CLI, public/operator API auth,
   OpenAPI route contract, payload limit, granular mock settlement preflight and
   workflow, artifact-driven settlement CLI, fixed-cardinality operational
-  snapshots, bounded unlabeled OpenMetrics rendering, and durable-job state
-  semantics. Production identity and metrics transport remain future.
+  snapshots, bounded unlabeled OpenMetrics rendering, fail-closed cached
+  dependency readiness, and durable-job state semantics. Production identity,
+  live dependency probes, and metrics transport remain future.
 - [x] Phase 6 profile/conformance layer: immutable pins, generic-Git overlays,
   rights/readiness records, recorded/manual source boundaries, and pinned NYU
   harness metadata, plus deterministic materialization of regular files from an
-  already-pinned local checkout and inert special-object inspection. Clone/ref,
-  submodule/LFS retrieval, archive extraction, and image materialization remain
-  future work.
+  already-pinned local checkout, inert special-object inspection, and
+  digest-bound reviewed overlay compilation with complete solver/runtime/
+  verifier role partitioning. Clone/ref, submodule/LFS retrieval, archive
+  extraction, and image materialization remain future work.
 - [x] Phase 7: HIP-4 read-only metadata, network-scoped identity, binding, and
   stale-metadata detection.
 - [x] Phase 8: mock settlement, deterministic intents, manual handoff,
