@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DisputeDecisionRecordV1",
+  "description": "Immutable terminal decision for an immutable open dispute.",
+  "type": "object",
+  "properties": {
+    "authority_id": {
+      "type": "string"
+    },
+    "claim_id": {
+      "$ref": "#/$defs/ClaimId"
+    },
+    "decided_at": {
+      "$ref": "#/$defs/UtcTimestamp"
+    },
+    "decision": {
+      "$ref": "#/$defs/DisputeDecisionKind"
+    },
+    "decision_evidence_digests": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Sha256Digest"
+      }
+    },
+    "decision_id": {
+      "type": "string"
+    },
+    "dispute_id": {
+      "type": "string"
+    },
+    "open_dispute_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "provisional_resolution_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "rationale": {
+      "type": "string"
+    },
+    "recomputation_aggregation_digest": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Sha256Digest"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "recomputation_evidence_bundle_digest": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Sha256Digest"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "record_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "schema_version": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "decision_id",
+    "dispute_id",
+    "claim_id",
+    "open_dispute_digest",
+    "provisional_resolution_digest",
+    "authority_id",
+    "decided_at",
+    "decision",
+    "rationale",
+    "decision_evidence_digests",
+    "record_digest"
+  ],
+  "$defs": {
+    "ClaimId": {
+      "description": "A claim ID derived from a claim-spec digest.",
+      "type": "string"
+    },
+    "DisputeDecisionKind": {
+      "type": "string",
+      "enum": [
+        "REJECTED",
+        "ACCEPTED_SUPERSEDED_BEFORE_FINALITY",
+        "UNRESOLVED_ESCALATED"
+      ]
+    },
+    "Sha256Digest": {
+      "description": "A SHA-256 digest serialized as 64 lowercase hexadecimal characters.",
+      "type": "string"
+    },
+    "UtcTimestamp": {
+      "description": "A canonical UTC RFC 3339 timestamp with whole-second precision.",
+      "type": "string"
+    }
+  }
+}

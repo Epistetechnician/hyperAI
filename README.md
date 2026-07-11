@@ -34,6 +34,7 @@ pnpm install --ignore-scripts --frozen-lockfile
 pnpm run hsai outcomes demo computational-market --scenario true --artifact-root artifacts/true --json
 pnpm run hsai outcomes evidence verify artifacts/true/evidence-bundle.json --blob-root artifacts/true
 pnpm run hsai outcomes demo computational-market --scenario invalid-then-valid --artifact-root artifacts/invalid-then-valid --json
+pnpm run hsai outcomes demo computational-market --scenario disputed-false-counterexample-true --artifact-root artifacts/disputed-counterexample --json
 pnpm run hsai outcomes demo computational-market --scenario false --artifact-root artifacts/false --json
 pnpm run hsai outcomes demo computational-market --scenario runner-error --artifact-root artifacts/error --json
 pnpm run hsai outcomes settlement preflight --binding artifacts/true/market-binding.json --resolution artifacts/true/final-resolution.json --metadata fixtures/hip4/outcome-meta.json --capabilities artifacts/true/hip4-capabilities.json
@@ -42,12 +43,14 @@ pnpm run hsai outcomes settlement reconcile artifacts/true/mock-reconciliation.j
 pnpm run hsai outcomes corpus profiles
 ```
 
-The TRUE and invalid-then-valid demos each perform one idempotent effect against
-the in-memory mock only. Invalid-then-valid proves `[FAIL, PASS, PASS]`: the
-first candidate remains unresolved and non-qualifying, while the later candidate
-reaches FINAL TRUE. The FALSE demo finalizes only after complete deadline/grace
-observation and does not automatically publish. The runner-error demo remains
-`UNRESOLVED/NONE`.
+The TRUE, invalid-then-valid, and disputed-counterexample demos each perform one
+idempotent effect against the in-memory mock only. Invalid-then-valid proves
+`[FAIL, PASS, PASS]`: the first candidate remains unresolved and non-qualifying,
+while the later candidate reaches FINAL TRUE. The disputed-counterexample demo
+retains a refused provisional FALSE, then uses a pre-cutoff candidate, immutable
+decision, superseding quorum, and explicit edge to reach FINAL TRUE. The FALSE
+demo finalizes only after complete deadline/grace observation and does not
+automatically publish. The runner-error demo remains `UNRESOLVED/NONE`.
 
 ## Repository gates
 

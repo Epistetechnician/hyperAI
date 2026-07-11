@@ -123,7 +123,7 @@
       "post": {
         "operationId": "runLocalDemo",
         "description": "Operator-gated hermetic local scenario with no external write.",
-        "parameters": [{"name": "scenario", "in": "path", "required": true, "schema": {"type": "string", "enum": ["true", "invalid-then-valid", "false", "runner-error"]}}],
+        "parameters": [{"name": "scenario", "in": "path", "required": true, "schema": {"type": "string", "enum": ["true", "invalid-then-valid", "disputed-false-counterexample-true", "false", "runner-error"]}}],
         "responses": {"200": {"description": "Local scenario report"}, "403": {"description": "Operator role required"}, "404": {"description": "Unknown scenario"}}
       }
     },

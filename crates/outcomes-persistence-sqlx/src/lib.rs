@@ -3,10 +3,11 @@
 use std::{path::Path, str::FromStr, time::Duration};
 
 use outcomes_domain::{
-    CanonicalizationError, ClaimSpecError, ClaimSpecV1, MutationContext, ReconciliationResultV1,
-    ReconciliationStatus, SettlementLifecycle, Sha256Digest, StateSlice, SubmissionReceiptV1,
-    UndeclaredMutation, UnsignedSettlementIntentV1, UtcTimestamp, canonical_json,
-    domain_separated_digest,
+    CanonicalizationError, ClaimSpecError, ClaimSpecV1, DisputeDecisionKind,
+    DisputeDecisionRecordV1, DisputeRecordV1, MutationContext, ReconciliationResultV1,
+    ReconciliationStatus, ResolutionRecordV1, ResolutionSupersessionRecordV1, SettlementLifecycle,
+    Sha256Digest, StateSlice, SubmissionReceiptV1, UndeclaredMutation, UnsignedSettlementIntentV1,
+    UtcTimestamp, canonical_json, domain_separated_digest,
 };
 use serde_json::json;
 use sqlx::{
@@ -18,6 +19,8 @@ use thiserror::Error;
 const SQLITE_MIGRATION_V1: &str = include_str!("../../../migrations/sqlite/0001_initial.sql");
 const SQLITE_MIGRATION_V2: &str =
     include_str!("../../../migrations/sqlite/0002_settlement_recovery.sql");
+const SQLITE_MIGRATION_V3: &str =
+    include_str!("../../../migrations/sqlite/0003_dispute_resolution_history.sql");
 
 /// Result of an idempotent immutable-claim freeze.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,6 +62,19 @@ pub struct SettlementRecoveryState {
     pub latest_reconciliation: Option<ReconciliationResultV1>,
     /// Fail-closed restart action; missing receipt never means blind resubmission.
     pub action: SettlementRecoveryAction,
+}
+
+/// Durable append-only dispute state loaded after process restart.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DisputeRecoveryState {
+    /// Immutable opening record.
+    pub open_dispute: DisputeRecordV1,
+    /// Terminal decision, when one has been appended.
+    pub decision: Option<DisputeDecisionRecordV1>,
+    /// Supersession edge for an accepted decision.
+    pub supersession: Option<ResolutionSupersessionRecordV1>,
+    /// Successor resolution referenced by the supersession edge.
+    pub successor_resolution: Option<ResolutionRecordV1>,
 }
 
 /// Persistence failures with fail-closed scope and idempotency semantics.
@@ -116,6 +132,14 @@ pub enum PersistenceError {
     SettlementRequestDigestMismatch {
         /// Intent whose receipt cannot be accepted.
         intent_id: String,
+    },
+    /// A dispute, decision, resolution, or supersession identity was reused.
+    #[error("dispute-resolution identity conflict for {identity}: {reason}")]
+    DisputeResolutionIdentityConflict {
+        /// Conflicting immutable identity.
+        identity: String,
+        /// Exact conflict class.
+        reason: &'static str,
     },
 }
 
@@ -176,6 +200,7 @@ impl SqliteStore {
         .await?;
         apply_sqlite_migration(&self.pool, 1, SQLITE_MIGRATION_V1, "2026-07-10T00:00:00Z").await?;
         apply_sqlite_migration(&self.pool, 2, SQLITE_MIGRATION_V2, "2026-07-11T00:00:00Z").await?;
+        apply_sqlite_migration(&self.pool, 3, SQLITE_MIGRATION_V3, "2026-07-11T12:00:00Z").await?;
         Ok(())
     }
 
@@ -293,6 +318,297 @@ impl SqliteStore {
             Ok(claim)
         })
         .transpose()
+    }
+
+    /// Append one immutable open dispute with audit and outbox records.
+    ///
+    /// Required declared slices are `DisputeFinalityV1`, `OperationsV1`, and
+    /// `DeliveryV1`. Exact replay is idempotent and never rewrites the opening.
+    ///
+    /// # Errors
+    ///
+    /// Returns a scope, identity, serialization, foreign-key, or database error.
+    pub async fn append_open_dispute(
+        &self,
+        context: &MutationContext,
+        dispute: &DisputeRecordV1,
+    ) -> Result<AppendOutcome, PersistenceError> {
+        require_open_dispute_scope(context)?;
+        let request_digest = dispute.record_digest;
+        let payload_json = serde_json::to_string(dispute)?;
+        let mut transaction = self.pool.begin().await?;
+        if begin_idempotency(
+            &mut transaction,
+            "append_open_dispute",
+            &context.request_id,
+            request_digest,
+            &dispute.opened_at,
+        )
+        .await?
+            == IdempotencyStart::Existing
+        {
+            let existing: Option<String> =
+                sqlx::query_scalar("SELECT payload_json FROM disputes WHERE dispute_id = ?")
+                    .bind(&dispute.dispute_id)
+                    .fetch_optional(&mut *transaction)
+                    .await?;
+            transaction.commit().await?;
+            return if existing.as_deref() == Some(payload_json.as_str()) {
+                Ok(AppendOutcome::ExistingIdentical)
+            } else {
+                Err(PersistenceError::DisputeResolutionIdentityConflict {
+                    identity: dispute.dispute_id.clone(),
+                    reason: "dispute ID reused for different semantics",
+                })
+            };
+        }
+        let inserted = sqlx::query(
+            "INSERT OR IGNORE INTO disputes(dispute_id, claim_id, provisional_resolution_digest, \
+             status, payload_json, opened_at, closes_at) VALUES(?, ?, ?, 'OPEN', ?, ?, ?)",
+        )
+        .bind(&dispute.dispute_id)
+        .bind(dispute.claim_id.to_string())
+        .bind(dispute.provisional_resolution_digest.to_string())
+        .bind(&payload_json)
+        .bind(dispute.opened_at.to_string())
+        .bind(dispute.closes_at.to_string())
+        .execute(&mut *transaction)
+        .await?
+        .rows_affected()
+            == 1;
+        if !inserted {
+            return Err(PersistenceError::DisputeResolutionIdentityConflict {
+                identity: dispute.dispute_id.clone(),
+                reason: "dispute ID already exists",
+            });
+        }
+        append_protocol_records(
+            &mut transaction,
+            context,
+            "DISPUTE_OPENED",
+            "DISPUTE",
+            &dispute.dispute_id,
+            dispute.record_digest,
+            &payload_json,
+            &dispute.opened_at,
+        )
+        .await?;
+        complete_idempotency(
+            &mut transaction,
+            "append_open_dispute",
+            &context.request_id,
+            dispute.record_digest,
+            &dispute.opened_at,
+        )
+        .await?;
+        transaction.commit().await?;
+        Ok(AppendOutcome::Inserted)
+    }
+
+    /// Atomically append a terminal accepted decision, successor resolution,
+    /// and immutable supersession edge.
+    ///
+    /// # Errors
+    ///
+    /// Returns a scope, binding, identity, serialization, foreign-key, audit,
+    /// outbox, or database error. The transaction commits no partial chain.
+    #[allow(clippy::too_many_lines)]
+    pub async fn append_accepted_dispute_supersession(
+        &self,
+        context: &MutationContext,
+        decision: &DisputeDecisionRecordV1,
+        successor: &ResolutionRecordV1,
+        supersession: &ResolutionSupersessionRecordV1,
+    ) -> Result<AppendOutcome, PersistenceError> {
+        require_dispute_supersession_scope(context)?;
+        validate_supersession_identity(decision, successor, supersession)?;
+        let payload = json!({
+            "decision": decision,
+            "successor_resolution": successor,
+            "supersession": supersession,
+        });
+        let request_digest =
+            domain_separated_digest("hsai.persist-dispute-supersession-request.v1", &payload)?;
+        let payload_json = serde_json::to_string(&payload)?;
+        let mut transaction = self.pool.begin().await?;
+        if begin_idempotency(
+            &mut transaction,
+            "append_dispute_supersession",
+            &context.request_id,
+            request_digest,
+            &decision.decided_at,
+        )
+        .await?
+            == IdempotencyStart::Existing
+        {
+            let existing: Option<String> = sqlx::query_scalar(
+                "SELECT payload_json FROM resolution_supersessions WHERE supersession_digest = ?",
+            )
+            .bind(supersession.record_digest.to_string())
+            .fetch_optional(&mut *transaction)
+            .await?;
+            transaction.commit().await?;
+            return if existing.as_deref() == Some(serde_json::to_string(supersession)?.as_str()) {
+                Ok(AppendOutcome::ExistingIdentical)
+            } else {
+                Err(PersistenceError::DisputeResolutionIdentityConflict {
+                    identity: supersession.supersession_id.clone(),
+                    reason: "supersession replay differs from durable record",
+                })
+            };
+        }
+
+        let open_payload: Option<String> = sqlx::query_scalar(
+            "SELECT payload_json FROM disputes WHERE dispute_id = ? AND claim_id = ? \
+             AND provisional_resolution_digest = ?",
+        )
+        .bind(&decision.dispute_id)
+        .bind(decision.claim_id.to_string())
+        .bind(decision.provisional_resolution_digest.to_string())
+        .fetch_optional(&mut *transaction)
+        .await?;
+        let open_payload =
+            open_payload.ok_or_else(|| PersistenceError::DisputeResolutionIdentityConflict {
+                identity: decision.dispute_id.clone(),
+                reason: "matching open dispute does not exist",
+            })?;
+        let open: DisputeRecordV1 = serde_json::from_str(&open_payload)?;
+        if open.record_digest != decision.open_dispute_digest {
+            return Err(PersistenceError::DisputeResolutionIdentityConflict {
+                identity: decision.dispute_id.clone(),
+                reason: "decision does not bind the durable open dispute",
+            });
+        }
+
+        sqlx::query(
+            "INSERT INTO resolution_records(resolution_digest, claim_id, truth_value, finality, \
+             evidence_digest, payload_json, created_at) VALUES(?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(successor.record_digest.to_string())
+        .bind(successor.claim_id.to_string())
+        .bind(enum_json_label(&successor.truth)?)
+        .bind(enum_json_label(&successor.finality)?)
+        .bind(successor.evidence_bundle_digest.to_string())
+        .bind(serde_json::to_string(successor)?)
+        .bind(supersession.linked_at.to_string())
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| PersistenceError::DisputeResolutionIdentityConflict {
+            identity: successor.resolution_id.clone(),
+            reason: "successor resolution identity already exists or is invalid",
+        })?;
+        sqlx::query(
+            "INSERT INTO dispute_decisions(decision_digest, dispute_id, claim_id, terminal_status, \
+             successor_resolution_digest, payload_json, decided_at) VALUES(?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(decision.record_digest.to_string())
+        .bind(&decision.dispute_id)
+        .bind(decision.claim_id.to_string())
+        .bind(enum_json_label(&decision.decision)?)
+        .bind(successor.record_digest.to_string())
+        .bind(serde_json::to_string(decision)?)
+        .bind(decision.decided_at.to_string())
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| PersistenceError::DisputeResolutionIdentityConflict {
+            identity: decision.decision_id.clone(),
+            reason: "dispute already has a terminal decision or identity conflicts",
+        })?;
+        sqlx::query(
+            "INSERT INTO resolution_supersessions(supersession_digest, claim_id, \
+             predecessor_resolution_digest, successor_resolution_digest, dispute_decision_digest, \
+             payload_json, created_at) VALUES(?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(supersession.record_digest.to_string())
+        .bind(supersession.claim_id.to_string())
+        .bind(supersession.predecessor_resolution_digest.to_string())
+        .bind(supersession.successor_resolution_digest.to_string())
+        .bind(supersession.dispute_decision_digest.to_string())
+        .bind(serde_json::to_string(supersession)?)
+        .bind(supersession.linked_at.to_string())
+        .execute(&mut *transaction)
+        .await?;
+        append_protocol_records(
+            &mut transaction,
+            context,
+            "DISPUTE_ACCEPTED_SUPERSEDED",
+            "DISPUTE",
+            &decision.dispute_id,
+            request_digest,
+            &payload_json,
+            &decision.decided_at,
+        )
+        .await?;
+        complete_idempotency(
+            &mut transaction,
+            "append_dispute_supersession",
+            &context.request_id,
+            supersession.record_digest,
+            &decision.decided_at,
+        )
+        .await?;
+        transaction.commit().await?;
+        Ok(AppendOutcome::Inserted)
+    }
+
+    /// Load the immutable dispute chain after restart.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database or stored-payload decoding error.
+    pub async fn dispute_recovery_state(
+        &self,
+        dispute_id: &str,
+    ) -> Result<Option<DisputeRecoveryState>, PersistenceError> {
+        let open_payload: Option<String> =
+            sqlx::query_scalar("SELECT payload_json FROM disputes WHERE dispute_id = ?")
+                .bind(dispute_id)
+                .fetch_optional(&self.pool)
+                .await?;
+        let Some(open_payload) = open_payload else {
+            return Ok(None);
+        };
+        let open_dispute = serde_json::from_str(&open_payload)?;
+        let decision_payload: Option<String> =
+            sqlx::query_scalar("SELECT payload_json FROM dispute_decisions WHERE dispute_id = ?")
+                .bind(dispute_id)
+                .fetch_optional(&self.pool)
+                .await?;
+        let decision: Option<DisputeDecisionRecordV1> = decision_payload
+            .map(|payload| serde_json::from_str(&payload))
+            .transpose()?;
+        let supersession_payload: Option<String> = match decision.as_ref() {
+            Some(decision) => sqlx::query_scalar(
+                "SELECT payload_json FROM resolution_supersessions WHERE dispute_decision_digest = ?",
+            )
+            .bind(decision.record_digest.to_string())
+            .fetch_optional(&self.pool)
+            .await?,
+            None => None,
+        };
+        let supersession: Option<ResolutionSupersessionRecordV1> = supersession_payload
+            .map(|payload| serde_json::from_str(&payload))
+            .transpose()?;
+        let successor_resolution = match supersession.as_ref() {
+            Some(link) => {
+                let payload: Option<String> = sqlx::query_scalar(
+                    "SELECT payload_json FROM resolution_records WHERE resolution_digest = ?",
+                )
+                .bind(link.successor_resolution_digest.to_string())
+                .fetch_optional(&self.pool)
+                .await?;
+                payload
+                    .map(|value| serde_json::from_str(&value))
+                    .transpose()?
+            }
+            None => None,
+        };
+        Ok(Some(DisputeRecoveryState {
+            open_dispute,
+            decision,
+            supersession,
+            successor_resolution,
+        }))
     }
 
     /// Persist a deterministic unsigned settlement intent before any backend call.
@@ -711,6 +1027,108 @@ fn require_settlement_scope(context: &MutationContext) -> Result<(), Persistence
     Ok(())
 }
 
+fn require_open_dispute_scope(context: &MutationContext) -> Result<(), PersistenceError> {
+    for slice in [
+        StateSlice::DisputeFinalityV1,
+        StateSlice::OperationsV1,
+        StateSlice::DeliveryV1,
+    ] {
+        context.scope.require(slice)?;
+    }
+    Ok(())
+}
+
+fn require_dispute_supersession_scope(context: &MutationContext) -> Result<(), PersistenceError> {
+    require_open_dispute_scope(context)?;
+    context.scope.require(StateSlice::ResolutionLedgerV1)?;
+    Ok(())
+}
+
+fn validate_supersession_identity(
+    decision: &DisputeDecisionRecordV1,
+    successor: &ResolutionRecordV1,
+    supersession: &ResolutionSupersessionRecordV1,
+) -> Result<(), PersistenceError> {
+    if decision.decision != DisputeDecisionKind::AcceptedSupersededBeforeFinality
+        || decision.claim_id != successor.claim_id
+        || decision.claim_id != supersession.claim_id
+        || decision.provisional_resolution_digest != supersession.predecessor_resolution_digest
+        || decision.record_digest != supersession.dispute_decision_digest
+        || successor.record_digest != supersession.successor_resolution_digest
+        || supersession.predecessor_resolution_digest == supersession.successor_resolution_digest
+    {
+        return Err(PersistenceError::DisputeResolutionIdentityConflict {
+            identity: supersession.supersession_id.clone(),
+            reason: "decision, successor, and supersession bindings do not agree",
+        });
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn append_protocol_records(
+    transaction: &mut Transaction<'_, Sqlite>,
+    context: &MutationContext,
+    event_type: &str,
+    aggregate_type: &str,
+    aggregate_id: &str,
+    payload_digest: Sha256Digest,
+    payload_json: &str,
+    received_at: &UtcTimestamp,
+) -> Result<(), PersistenceError> {
+    let outbox_payload = json!({
+        "event_type": event_type,
+        "aggregate_type": aggregate_type,
+        "aggregate_id": aggregate_id,
+        "payload_digest": payload_digest,
+    });
+    let outbox_digest = domain_separated_digest("hsai.protocol-outbox.v1", &outbox_payload)?;
+    sqlx::query(
+        "INSERT INTO outbox_events(outbox_id, aggregate_type, aggregate_id, event_type, \
+         payload_digest, payload_json, created_at) VALUES(?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(prefixed_id("outbox", outbox_digest))
+    .bind(aggregate_type)
+    .bind(aggregate_id)
+    .bind(event_type)
+    .bind(outbox_digest.to_string())
+    .bind(serde_json::to_string(&outbox_payload)?)
+    .bind(received_at.to_string())
+    .execute(&mut **transaction)
+    .await?;
+
+    let audit_digest = domain_separated_digest(
+        "hsai.protocol-audit.v1",
+        &json!({
+            "actor_id": context.actor_id,
+            "request_id": context.request_id,
+            "event_type": event_type,
+            "aggregate_type": aggregate_type,
+            "aggregate_id": aggregate_id,
+            "payload_digest": payload_digest,
+        }),
+    )?;
+    sqlx::query(
+        "INSERT INTO audit_events(audit_id, event_type, actor_id, request_id, \
+         declared_state_slices_json, aggregate_type, aggregate_id, payload_digest, payload_json, \
+         received_at, audit_digest) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(prefixed_id("audit", audit_digest))
+    .bind(event_type)
+    .bind(&context.actor_id)
+    .bind(&context.request_id)
+    .bind(serde_json::to_string(&context.scope)?)
+    .bind(aggregate_type)
+    .bind(aggregate_id)
+    .bind(payload_digest.to_string())
+    .bind(payload_json)
+    .bind(received_at.to_string())
+    .bind(audit_digest.to_string())
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
 async fn verify_existing_settlement_intent(
     transaction: &mut Transaction<'_, Sqlite>,
     intent: &UnsignedSettlementIntentV1,
@@ -1065,6 +1483,22 @@ mod tests {
         }
     }
 
+    fn dispute_context(request_id: &str, include_resolution: bool) -> MutationContext {
+        let mut slices = vec![
+            StateSlice::DisputeFinalityV1,
+            StateSlice::OperationsV1,
+            StateSlice::DeliveryV1,
+        ];
+        if include_resolution {
+            slices.push(StateSlice::ResolutionLedgerV1);
+        }
+        MutationContext {
+            actor_id: "dispute-authority-local".to_owned(),
+            request_id: request_id.to_owned(),
+            scope: MutationScope::new(slices),
+        }
+    }
+
     fn digest(label: &str) -> Result<Sha256Digest, CanonicalizationError> {
         domain_separated_digest("hsai.persistence-test.v1", &json!({"label": label}))
     }
@@ -1115,6 +1549,122 @@ mod tests {
         .execute(&store.pool)
         .await?;
         Ok((binding_digest, resolution_digest))
+    }
+
+    async fn seed_dispute_dependencies(
+        store: &SqliteStore,
+    ) -> Result<(ClaimSpecV1, ResolutionRecordV1, Sha256Digest), Box<dyn std::error::Error>> {
+        let claim = local_demo_claim_draft()?.freeze()?;
+        store
+            .freeze_claim(
+                &freeze_context("dispute-seed"),
+                &claim,
+                &timestamp("2026-07-10T10:01:00Z")?,
+                "test-build",
+            )
+            .await?;
+        let evidence_digest = digest("dispute-evidence")?;
+        sqlx::query(
+            "INSERT INTO evidence_manifests(evidence_digest, claim_id, payload_json, created_at) \
+             VALUES(?, ?, '{}', '2026-07-10T10:02:00Z')",
+        )
+        .bind(evidence_digest.to_string())
+        .bind(claim.claim_id.to_string())
+        .execute(&store.pool)
+        .await?;
+        let predecessor = ResolutionRecordV1 {
+            schema_version: "hsai.resolution-record.v1".to_owned(),
+            resolution_id: "resolution_predecessor".to_owned(),
+            claim_id: claim.claim_id.clone(),
+            truth: outcomes_domain::ClaimTruth::False,
+            finality: outcomes_domain::ResolutionFinality::Provisional,
+            evidence_bundle_digest: evidence_digest,
+            attestation_digests: vec![digest("predecessor-attestation")?],
+            dispute_window_start: timestamp("2026-07-10T10:03:00Z")?,
+            dispute_window_end: timestamp("2026-07-10T11:03:00Z")?,
+            record_digest: digest("predecessor-resolution")?,
+        };
+        sqlx::query(
+            "INSERT INTO resolution_records(resolution_digest, claim_id, truth_value, finality, \
+             evidence_digest, payload_json, created_at) VALUES(?, ?, 'FALSE', 'PROVISIONAL', ?, ?, ?)",
+        )
+        .bind(predecessor.record_digest.to_string())
+        .bind(claim.claim_id.to_string())
+        .bind(evidence_digest.to_string())
+        .bind(serde_json::to_string(&predecessor)?)
+        .bind(predecessor.dispute_window_start.to_string())
+        .execute(&store.pool)
+        .await?;
+        Ok((claim, predecessor, evidence_digest))
+    }
+
+    fn dispute_chain(
+        claim: &ClaimSpecV1,
+        predecessor: &ResolutionRecordV1,
+        evidence_digest: Sha256Digest,
+    ) -> Result<
+        (
+            DisputeRecordV1,
+            DisputeDecisionRecordV1,
+            ResolutionRecordV1,
+            ResolutionSupersessionRecordV1,
+        ),
+        Box<dyn std::error::Error>,
+    > {
+        let open = DisputeRecordV1 {
+            schema_version: "hsai.dispute-record.v1".to_owned(),
+            dispute_id: "dispute_counterexample".to_owned(),
+            claim_id: claim.claim_id.clone(),
+            provisional_resolution_digest: predecessor.record_digest,
+            opened_at: timestamp("2026-07-10T10:30:00Z")?,
+            closes_at: predecessor.dispute_window_end.clone(),
+            authenticated_actor_id: "challenger-local".to_owned(),
+            reason_code: "VALID_COUNTEREXAMPLE".to_owned(),
+            evidence_digests: vec![digest("counterexample")?],
+            counterexample_candidate_digest: Some(digest("candidate")?),
+            status: outcomes_domain::DisputeStatus::Open,
+            decision_rationale: None,
+            record_digest: digest("open-dispute")?,
+        };
+        let decision = DisputeDecisionRecordV1 {
+            schema_version: "hsai.dispute-decision-record.v1".to_owned(),
+            decision_id: "decision_counterexample".to_owned(),
+            dispute_id: open.dispute_id.clone(),
+            claim_id: claim.claim_id.clone(),
+            open_dispute_digest: open.record_digest,
+            provisional_resolution_digest: predecessor.record_digest,
+            authority_id: "dispute-authority-local".to_owned(),
+            decided_at: timestamp("2026-07-10T10:40:00Z")?,
+            decision: DisputeDecisionKind::AcceptedSupersededBeforeFinality,
+            rationale: "counterexample validated by bounded recomputation".to_owned(),
+            decision_evidence_digests: vec![digest("decision-evidence")?],
+            recomputation_evidence_bundle_digest: Some(evidence_digest),
+            recomputation_aggregation_digest: Some(digest("recomputation")?),
+            record_digest: digest("decision")?,
+        };
+        let successor = ResolutionRecordV1 {
+            schema_version: "hsai.resolution-record.v1".to_owned(),
+            resolution_id: "resolution_successor".to_owned(),
+            claim_id: claim.claim_id.clone(),
+            truth: outcomes_domain::ClaimTruth::True,
+            finality: outcomes_domain::ResolutionFinality::Provisional,
+            evidence_bundle_digest: evidence_digest,
+            attestation_digests: vec![digest("successor-attestation")?],
+            dispute_window_start: decision.decided_at.clone(),
+            dispute_window_end: timestamp("2026-07-10T11:40:00Z")?,
+            record_digest: digest("successor-resolution")?,
+        };
+        let supersession = ResolutionSupersessionRecordV1 {
+            schema_version: "hsai.resolution-supersession-record.v1".to_owned(),
+            supersession_id: "supersession_counterexample".to_owned(),
+            claim_id: claim.claim_id.clone(),
+            predecessor_resolution_digest: predecessor.record_digest,
+            dispute_decision_digest: decision.record_digest,
+            successor_resolution_digest: successor.record_digest,
+            linked_at: decision.decided_at.clone(),
+            record_digest: digest("supersession")?,
+        };
+        Ok((open, decision, successor, supersession))
     }
 
     fn settlement_intent(
@@ -1188,7 +1738,7 @@ mod tests {
             sqlx::query_scalar("SELECT COUNT(*) FROM hsai_schema_migrations")
                 .fetch_one(&store.pool)
                 .await?;
-        assert_eq!(migration_count, 2);
+        assert_eq!(migration_count, 3);
         Ok(())
     }
 
@@ -1701,6 +2251,187 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn contract_dispute_supersession_is_append_only_idempotent_and_restart_safe()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let database_path = directory.path().join("dispute-recovery.db");
+        let store = SqliteStore::connect_path(&database_path, 1).await?;
+        store.migrate().await?;
+        let (claim, predecessor, evidence) = seed_dispute_dependencies(&store).await?;
+        let (open, decision, successor, supersession) =
+            dispute_chain(&claim, &predecessor, evidence)?;
+        assert_eq!(
+            store
+                .append_open_dispute(&dispute_context("open", false), &open)
+                .await?,
+            AppendOutcome::Inserted
+        );
+        assert_eq!(
+            store
+                .append_accepted_dispute_supersession(
+                    &dispute_context("decide", true),
+                    &decision,
+                    &successor,
+                    &supersession,
+                )
+                .await?,
+            AppendOutcome::Inserted
+        );
+        assert!(
+            sqlx::query("UPDATE disputes SET status = 'REJECTED'")
+                .execute(&store.pool)
+                .await
+                .is_err()
+        );
+        assert!(
+            sqlx::query("DELETE FROM dispute_decisions")
+                .execute(&store.pool)
+                .await
+                .is_err()
+        );
+        assert!(
+            sqlx::query("UPDATE resolution_supersessions SET payload_json = '{}'")
+                .execute(&store.pool)
+                .await
+                .is_err()
+        );
+        drop(store);
+
+        let restarted = SqliteStore::connect_path(&database_path, 1).await?;
+        restarted.migrate().await?;
+        let recovered = restarted
+            .dispute_recovery_state(&open.dispute_id)
+            .await?
+            .ok_or_else(|| std::io::Error::other("dispute chain missing after restart"))?;
+        assert_eq!(recovered.open_dispute, open);
+        assert_eq!(recovered.decision, Some(decision.clone()));
+        assert_eq!(recovered.supersession, Some(supersession.clone()));
+        assert_eq!(recovered.successor_resolution, Some(successor.clone()));
+        assert_eq!(
+            restarted
+                .append_accepted_dispute_supersession(
+                    &dispute_context("decide", true),
+                    &decision,
+                    &successor,
+                    &supersession,
+                )
+                .await?,
+            AppendOutcome::ExistingIdentical
+        );
+        for table in ["disputes", "dispute_decisions", "resolution_supersessions"] {
+            let count: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
+                .fetch_one(&restarted.pool)
+                .await?;
+            assert_eq!(count, 1, "unexpected rows in {table}");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn contract_dispute_supersession_scope_and_conflicts_fail_without_partial_rows()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let store = SqliteStore::in_memory().await?;
+        store.migrate().await?;
+        let (claim, predecessor, evidence) = seed_dispute_dependencies(&store).await?;
+        let (open, decision, successor, supersession) =
+            dispute_chain(&claim, &predecessor, evidence)?;
+        store
+            .append_open_dispute(&dispute_context("open-scope", false), &open)
+            .await?;
+        let incomplete = dispute_context("missing-resolution-slice", false);
+        assert!(matches!(
+            store
+                .append_accepted_dispute_supersession(
+                    &incomplete,
+                    &decision,
+                    &successor,
+                    &supersession,
+                )
+                .await,
+            Err(PersistenceError::UndeclaredMutation(_))
+        ));
+        for table in ["dispute_decisions", "resolution_supersessions"] {
+            let count: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
+                .fetch_one(&store.pool)
+                .await?;
+            assert_eq!(count, 0);
+        }
+
+        let mut conflicting = decision.clone();
+        conflicting.rationale = "different semantics".to_owned();
+        conflicting.record_digest = digest("conflicting-decision")?;
+        assert!(matches!(
+            store
+                .append_accepted_dispute_supersession(
+                    &dispute_context("conflict", true),
+                    &conflicting,
+                    &successor,
+                    &supersession,
+                )
+                .await,
+            Err(PersistenceError::DisputeResolutionIdentityConflict { .. })
+        ));
+        let successor_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM resolution_records WHERE resolution_digest = ?",
+        )
+        .bind(successor.record_digest.to_string())
+        .fetch_one(&store.pool)
+        .await?;
+        assert_eq!(successor_count, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn contract_dispute_supersession_audit_failure_rolls_back_atomically()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let store = SqliteStore::in_memory().await?;
+        store.migrate().await?;
+        let (claim, predecessor, evidence) = seed_dispute_dependencies(&store).await?;
+        let (open, decision, successor, supersession) =
+            dispute_chain(&claim, &predecessor, evidence)?;
+        store
+            .append_open_dispute(&dispute_context("open-rollback", false), &open)
+            .await?;
+        sqlx::raw_sql(
+            "CREATE TRIGGER injected_dispute_audit_failure BEFORE INSERT ON audit_events \
+             WHEN NEW.event_type = 'DISPUTE_ACCEPTED_SUPERSEDED' \
+             BEGIN SELECT RAISE(ABORT, 'injected dispute audit failure'); END;",
+        )
+        .execute(&store.pool)
+        .await?;
+        assert!(matches!(
+            store
+                .append_accepted_dispute_supersession(
+                    &dispute_context("decide-rollback", true),
+                    &decision,
+                    &successor,
+                    &supersession,
+                )
+                .await,
+            Err(PersistenceError::Sqlx(_))
+        ));
+        for table in ["dispute_decisions", "resolution_supersessions"] {
+            let count: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
+                .fetch_one(&store.pool)
+                .await?;
+            assert_eq!(count, 0, "transaction leaked a row in {table}");
+        }
+        let successor_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM resolution_records WHERE resolution_digest = ?",
+        )
+        .bind(successor.record_digest.to_string())
+        .fetch_one(&store.pool)
+        .await?;
+        let idempotency_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM idempotency_keys WHERE scope = 'append_dispute_supersession'",
+        )
+        .fetch_one(&store.pool)
+        .await?;
+        assert_eq!((successor_count, idempotency_count), (0, 0));
+        Ok(())
+    }
+
+    #[tokio::test]
     #[ignore = "requires an explicitly provided HSAI_TEST_POSTGRES_URL"]
     async fn contract_postgres_migrations_apply_in_isolated_schema()
     -> Result<(), Box<dyn std::error::Error>> {
@@ -1729,6 +2460,11 @@ mod tests {
             ))
             .execute(&mut connection)
             .await?;
+            sqlx::raw_sql(include_str!(
+                "../../../migrations/postgres/0003_dispute_resolution_history.sql"
+            ))
+            .execute(&mut connection)
+            .await?;
             let required_table_count: i64 = sqlx::query_scalar(
                 "SELECT COUNT(*) FROM information_schema.tables \
                  WHERE table_schema = $1 AND table_name = ANY($2)",
@@ -1741,6 +2477,8 @@ mod tests {
                 "settlement_attempts",
                 "settlement_receipts",
                 "settlement_reconciliations",
+                "dispute_decisions",
+                "resolution_supersessions",
             ])
             .fetch_one(&mut connection)
             .await?;
@@ -1757,7 +2495,7 @@ mod tests {
         .await;
         let required_table_count = migration_result?;
         cleanup_result?;
-        assert_eq!(required_table_count, 6);
+        assert_eq!(required_table_count, 8);
         Ok(())
     }
 }

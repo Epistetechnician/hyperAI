@@ -15,6 +15,10 @@ Implemented and tested locally does not mean production-ready.
   configuration, or seccomp/AppArmor policy for hostile production code.
 - SQLite transaction/concurrency behavior and PostgreSQL 16 migrations are
   tested. Production HA, backup/restore, and rolling-upgrade behavior are not.
+- Counterexample correction is tested locally with append-only SQLite history,
+  PostgreSQL migration contracts, portable evidence, and mock settlement. The
+  composed demo does not expose a production dispute endpoint, authenticate a
+  live dispute authority, or perform a testnet/mainnet correction.
 - External corpus profiles and regular-file materialization from already-pinned
   local checkouts are tested. Special objects are inspected inertly and block
   readiness when unresolved. Reviewed overlays compile sanitized local

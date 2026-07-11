@@ -152,11 +152,11 @@ mod tests {
         AdapterCapabilityRecordV1, AdapterHealthV1, AdmissionDecisionV1, AgentHarnessDescriptorV1,
         AgentRunPlanV1, AgentRunResultV1, AgentTraceBundleV1, CandidateEnvelopeV1,
         ChallengeDescriptorV1, ChallengePackageV1, ClaimSpecV1, ContentBlobRefV1,
-        CorpusDescriptorV1, CorpusSnapshotV1, DisputeRecordV1, ExecutionManifestV1,
-        MarketBindingV1, ObservationSnapshotV1, OutcomeEvidenceBundleV1, ReconciliationResultV1,
-        ResolutionAttestationV1, ResolutionRecordV1, RightsAndProvenanceAssessmentV1,
-        SettlementHandoffV1, SolverViewManifestV1, SubmissionReceiptV1, UnsignedSettlementIntentV1,
-        canonical_json,
+        CorpusDescriptorV1, CorpusSnapshotV1, DisputeDecisionRecordV1, DisputeRecordV1,
+        ExecutionManifestV1, MarketBindingV1, ObservationSnapshotV1, OutcomeEvidenceBundleV1,
+        ReconciliationResultV1, ResolutionAttestationV1, ResolutionRecordV1,
+        ResolutionSupersessionRecordV1, RightsAndProvenanceAssessmentV1, SettlementHandoffV1,
+        SolverViewManifestV1, SubmissionReceiptV1, UnsignedSettlementIntentV1, canonical_json,
     };
 
     #[test]
@@ -204,6 +204,14 @@ mod tests {
         );
         assert_schema!(ResolutionRecordV1, "resolution-record-v1.schema.json");
         assert_schema!(DisputeRecordV1, "dispute-record-v1.schema.json");
+        assert_schema!(
+            DisputeDecisionRecordV1,
+            "dispute-decision-record-v1.schema.json"
+        );
+        assert_schema!(
+            ResolutionSupersessionRecordV1,
+            "resolution-supersession-record-v1.schema.json"
+        );
         assert_schema!(MarketBindingV1, "market-binding-v1.schema.json");
         assert_schema!(
             UnsignedSettlementIntentV1,

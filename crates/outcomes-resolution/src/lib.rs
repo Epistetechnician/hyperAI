@@ -3,9 +3,10 @@
 use std::collections::HashMap;
 
 use outcomes_domain::{
-    ClaimSpecV1, ClaimTruth, CompletenessStatus, DisputeRecordV1, DisputeStatus,
-    ExecutionManifestV1, ExecutionOutcome, ResolutionAttestationV1, ResolutionFinality,
-    ResolutionRecordV1, Sha256Digest, UtcTimestamp, domain_separated_digest,
+    ClaimSpecV1, ClaimTruth, CompletenessStatus, DisputeDecisionKind, DisputeDecisionRecordV1,
+    DisputeRecordV1, DisputeStatus, ExecutionManifestV1, ExecutionOutcome, ResolutionAttestationV1,
+    ResolutionFinality, ResolutionRecordV1, ResolutionSupersessionRecordV1, Sha256Digest,
+    UtcTimestamp, domain_separated_digest,
 };
 use outcomes_evidence::{AttestorRegistry, EvidenceError, verify_quorum};
 use serde::Serialize;
@@ -39,6 +40,24 @@ pub struct ResolutionEvaluation {
     pub qualifying_run_digests: Vec<Sha256Digest>,
     /// Reasons truth remains unresolved.
     pub blockers: Vec<ResolutionBlocker>,
+}
+
+/// Digest the exact aggregation payload used by dispute recomputation.
+///
+/// # Errors
+///
+/// Returns an error when the aggregation payload cannot be canonicalized.
+pub fn resolution_aggregation_digest(
+    evaluation: &ResolutionEvaluation,
+) -> Result<Sha256Digest, ResolutionError> {
+    Ok(domain_separated_digest(
+        "hsai.resolution-aggregation.v1",
+        &(
+            evaluation.truth,
+            &evaluation.qualifying_run_digests,
+            format!("{:?}", evaluation.blockers),
+        ),
+    )?)
 }
 
 /// Resolution, dispute, quorum, and finality failures.
@@ -80,6 +99,12 @@ pub enum ResolutionError {
     /// Dispute decision is not a supported terminal state.
     #[error("invalid terminal dispute decision")]
     InvalidDisputeDecision,
+    /// A dispute decision or supersession record does not bind its inputs.
+    #[error("dispute decision or resolution supersession binding mismatch")]
+    SupersessionBindingMismatch,
+    /// A bounded dispute field is empty or exceeds its protocol ceiling.
+    #[error("invalid bounded dispute decision payload")]
+    InvalidDisputePayload,
 }
 
 /// Evaluate the existential predicate without mutating operational state.
@@ -197,7 +222,13 @@ pub fn propose_resolution(
     if evaluation.truth == ClaimTruth::Unresolved {
         return Err(ResolutionError::UnresolvedProposal);
     }
-    verify_attestation_binding(claim, evaluation, evidence_bundle_digest, attestations)?;
+    verify_attestation_binding(
+        claim,
+        evaluation,
+        evidence_bundle_digest,
+        attestations,
+        None,
+    )?;
     verify_quorum(attestations, registry, claim.attestation_policy.threshold)?;
     let dispute_end = proposed_at.checked_add_seconds(claim.dispute_policy.window_seconds)?;
     build_record(
@@ -250,6 +281,7 @@ pub fn finalize_resolution(
         &evaluation,
         provisional.evidence_bundle_digest,
         final_attestations,
+        None,
     )?;
     if final_attestations
         .iter()
@@ -330,11 +362,255 @@ pub fn open_dispute(
     })
 }
 
+/// Append an immutable terminal decision for an immutable open dispute.
+///
+/// # Errors
+///
+/// Rejects invalid authority, time, predecessor, counterexample, recomputation,
+/// or bounded payload semantics.
+#[allow(clippy::too_many_arguments)]
+pub fn decide_dispute(
+    claim: &ClaimSpecV1,
+    predecessor: &ResolutionRecordV1,
+    dispute: &DisputeRecordV1,
+    authority_id: &str,
+    decision: DisputeDecisionKind,
+    rationale: String,
+    decision_evidence_digests: Vec<Sha256Digest>,
+    recomputation_evidence_bundle_digest: Option<Sha256Digest>,
+    recomputation_aggregation_digest: Option<Sha256Digest>,
+    recomputed: Option<&ResolutionEvaluation>,
+    decided_at: UtcTimestamp,
+) -> Result<DisputeDecisionRecordV1, ResolutionError> {
+    if dispute.status != DisputeStatus::Open
+        || dispute.claim_id != claim.claim_id
+        || predecessor.claim_id != claim.claim_id
+        || dispute.provisional_resolution_digest != predecessor.record_digest
+        || predecessor.finality != ResolutionFinality::Provisional
+        || authority_id != claim.dispute_policy.authority_id
+        || decided_at < dispute.opened_at
+        || decided_at > dispute.closes_at
+    {
+        return Err(ResolutionError::SupersessionBindingMismatch);
+    }
+    if rationale.trim().is_empty()
+        || rationale.len() > 1_024
+        || decision_evidence_digests.is_empty()
+        || decision_evidence_digests.len() > 32
+    {
+        return Err(ResolutionError::InvalidDisputePayload);
+    }
+    if decision == DisputeDecisionKind::AcceptedSupersededBeforeFinality
+        && (predecessor.truth != ClaimTruth::False
+            || !claim.dispute_policy.counterexample_candidate_allowed
+            || dispute.reason_code != "COUNTEREXAMPLE"
+            || dispute.counterexample_candidate_digest.is_none()
+            || recomputation_evidence_bundle_digest.is_none()
+            || recomputation_aggregation_digest.is_none()
+            || recomputed
+                .is_none_or(|value| value.truth != ClaimTruth::True || !value.blockers.is_empty()))
+    {
+        return Err(ResolutionError::InvalidDisputeDecision);
+    }
+    if let (Some(expected), Some(recomputed)) = (recomputation_aggregation_digest, recomputed)
+        && expected != resolution_aggregation_digest(recomputed)?
+    {
+        return Err(ResolutionError::SupersessionBindingMismatch);
+    }
+    let identity = (
+        "hsai.dispute-decision-record.v1",
+        &dispute.dispute_id,
+        &claim.claim_id,
+        dispute.record_digest,
+        predecessor.record_digest,
+        authority_id,
+        &decided_at,
+        decision,
+        &rationale,
+        &decision_evidence_digests,
+        recomputation_evidence_bundle_digest,
+        recomputation_aggregation_digest,
+    );
+    let record_digest = domain_separated_digest("hsai.dispute-decision-record.v1", &identity)?;
+    Ok(DisputeDecisionRecordV1 {
+        schema_version: "hsai.dispute-decision-record.v1".to_owned(),
+        decision_id: format!("decision_{}", &record_digest.to_hex()[..32]),
+        dispute_id: dispute.dispute_id.clone(),
+        claim_id: claim.claim_id.clone(),
+        open_dispute_digest: dispute.record_digest,
+        provisional_resolution_digest: predecessor.record_digest,
+        authority_id: authority_id.to_owned(),
+        decided_at,
+        decision,
+        rationale,
+        decision_evidence_digests,
+        recomputation_evidence_bundle_digest,
+        recomputation_aggregation_digest,
+        record_digest,
+    })
+}
+
+/// Propose a TRUE replacement for a disputed provisional FALSE record.
+///
+/// # Errors
+///
+/// Rejects invalid predecessor, decision, recomputation, supersession
+/// attestation, or quorum bindings.
+#[allow(clippy::too_many_arguments)]
+pub fn propose_superseding_resolution(
+    claim: &ClaimSpecV1,
+    predecessor: &ResolutionRecordV1,
+    decision: &DisputeDecisionRecordV1,
+    evaluation: &ResolutionEvaluation,
+    evidence_bundle_digest: Sha256Digest,
+    attestations: &[ResolutionAttestationV1],
+    registry: &AttestorRegistry,
+) -> Result<ResolutionRecordV1, ResolutionError> {
+    if predecessor.finality != ResolutionFinality::Provisional
+        || predecessor.truth != ClaimTruth::False
+        || decision.claim_id != claim.claim_id
+        || decision.provisional_resolution_digest != predecessor.record_digest
+        || decision.decision != DisputeDecisionKind::AcceptedSupersededBeforeFinality
+        || decision.recomputation_evidence_bundle_digest != Some(evidence_bundle_digest)
+        || decision.recomputation_aggregation_digest
+            != Some(resolution_aggregation_digest(evaluation)?)
+        || evaluation.truth != ClaimTruth::True
+        || !evaluation.blockers.is_empty()
+    {
+        return Err(ResolutionError::SupersessionBindingMismatch);
+    }
+    verify_attestation_binding(
+        claim,
+        evaluation,
+        evidence_bundle_digest,
+        attestations,
+        Some(predecessor.record_digest),
+    )?;
+    verify_quorum(attestations, registry, claim.attestation_policy.threshold)?;
+    build_record(
+        claim,
+        ClaimTruth::True,
+        ResolutionFinality::Provisional,
+        evidence_bundle_digest,
+        attestations,
+        predecessor.dispute_window_start.clone(),
+        predecessor.dispute_window_end.clone(),
+    )
+}
+
+/// Finalize an accepted superseding resolution after the original window.
+///
+/// # Errors
+///
+/// Rejects invalid predecessor, window, pause, supersession attestation, or
+/// quorum bindings.
+#[allow(clippy::too_many_arguments)]
+pub fn finalize_superseding_resolution(
+    claim: &ClaimSpecV1,
+    predecessor: &ResolutionRecordV1,
+    provisional: &ResolutionRecordV1,
+    now: &UtcTimestamp,
+    paused: bool,
+    final_attestations: &[ResolutionAttestationV1],
+    registry: &AttestorRegistry,
+) -> Result<ResolutionRecordV1, ResolutionError> {
+    if predecessor.finality != ResolutionFinality::Provisional
+        || predecessor.truth != ClaimTruth::False
+        || provisional.finality != ResolutionFinality::Provisional
+        || provisional.truth != ClaimTruth::True
+        || now < &provisional.dispute_window_end
+        || paused
+    {
+        return Err(ResolutionError::SupersessionBindingMismatch);
+    }
+    let evaluation = ResolutionEvaluation {
+        truth: ClaimTruth::True,
+        qualifying_run_digests: final_attestations
+            .first()
+            .map_or_else(Vec::new, |value| value.qualifying_run_digests.clone()),
+        blockers: Vec::new(),
+    };
+    verify_attestation_binding(
+        claim,
+        &evaluation,
+        provisional.evidence_bundle_digest,
+        final_attestations,
+        Some(predecessor.record_digest),
+    )?;
+    if final_attestations
+        .iter()
+        .any(|value| value.finality != ResolutionFinality::Final)
+    {
+        return Err(ResolutionError::AttestationBindingMismatch);
+    }
+    verify_quorum(
+        final_attestations,
+        registry,
+        claim.attestation_policy.threshold,
+    )?;
+    build_record(
+        claim,
+        ClaimTruth::True,
+        ResolutionFinality::Final,
+        provisional.evidence_bundle_digest,
+        final_attestations,
+        provisional.dispute_window_start.clone(),
+        provisional.dispute_window_end.clone(),
+    )
+}
+
+/// Bind the acyclic predecessor-decision-successor supersession edge.
+///
+/// # Errors
+///
+/// Rejects a final predecessor or mismatched claim, decision, or successor.
+pub fn link_resolution_supersession(
+    predecessor: &ResolutionRecordV1,
+    decision: &DisputeDecisionRecordV1,
+    successor: &ResolutionRecordV1,
+    linked_at: UtcTimestamp,
+) -> Result<ResolutionSupersessionRecordV1, ResolutionError> {
+    if predecessor.finality == ResolutionFinality::Final
+        || predecessor.claim_id != successor.claim_id
+        || decision.claim_id != predecessor.claim_id
+        || decision.provisional_resolution_digest != predecessor.record_digest
+        || decision.decision != DisputeDecisionKind::AcceptedSupersededBeforeFinality
+        || successor.truth != ClaimTruth::True
+        || !matches!(
+            successor.finality,
+            ResolutionFinality::Provisional | ResolutionFinality::Final
+        )
+    {
+        return Err(ResolutionError::SupersessionBindingMismatch);
+    }
+    let identity = (
+        "hsai.resolution-supersession-record.v1",
+        &predecessor.claim_id,
+        predecessor.record_digest,
+        decision.record_digest,
+        successor.record_digest,
+        &linked_at,
+    );
+    let record_digest =
+        domain_separated_digest("hsai.resolution-supersession-record.v1", &identity)?;
+    Ok(ResolutionSupersessionRecordV1 {
+        schema_version: "hsai.resolution-supersession-record.v1".to_owned(),
+        supersession_id: format!("supersession_{}", &record_digest.to_hex()[..32]),
+        claim_id: predecessor.claim_id.clone(),
+        predecessor_resolution_digest: predecessor.record_digest,
+        dispute_decision_digest: decision.record_digest,
+        successor_resolution_digest: successor.record_digest,
+        linked_at,
+        record_digest,
+    })
+}
+
 fn verify_attestation_binding(
     claim: &ClaimSpecV1,
     evaluation: &ResolutionEvaluation,
     evidence_bundle_digest: Sha256Digest,
     attestations: &[ResolutionAttestationV1],
+    expected_supersession: Option<Sha256Digest>,
 ) -> Result<(), ResolutionError> {
     let claim_digest = claim
         .claim_spec_digest()
@@ -349,6 +625,7 @@ fn verify_attestation_binding(
                 || attestation.resolution_policy_digest != policy_digest
                 || attestation.evidence_bundle_digest != evidence_bundle_digest
                 || attestation.qualifying_run_digests != evaluation.qualifying_run_digests
+                || attestation.supersedes_non_settling_record != expected_supersession
         })
     {
         return Err(ResolutionError::AttestationBindingMismatch);
@@ -726,6 +1003,257 @@ mod tests {
         )?;
         assert_eq!(final_record.finality, ResolutionFinality::Final);
         assert_eq!(final_record.truth, ClaimTruth::True);
+        Ok(())
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn contract_counterexample_supersession_is_append_only_and_quorum_bound()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let claim = local_demo_claim_draft()?.freeze()?;
+        let start = timestamp("2026-07-10T12:05:00Z")?;
+        let end = timestamp("2026-07-10T12:15:00Z")?;
+        let false_evidence = Sha256Digest::from_bytes([70; 32]);
+        let predecessor = build_record(
+            &claim,
+            ClaimTruth::False,
+            ResolutionFinality::Provisional,
+            false_evidence,
+            &[],
+            start.clone(),
+            end.clone(),
+        )?;
+        let counterexample = Sha256Digest::from_bytes([71; 32]);
+        let dispute = open_dispute(
+            &claim,
+            &predecessor,
+            "authenticated-challenger",
+            "COUNTEREXAMPLE",
+            vec![Sha256Digest::from_bytes([72; 32])],
+            Some(counterexample),
+            timestamp("2026-07-10T12:07:00Z")?,
+        )?;
+        let executions = [
+            execution(&claim, 71, "counterexample-pass-1", ExecutionOutcome::Pass)?,
+            execution(&claim, 71, "counterexample-pass-2", ExecutionOutcome::Pass)?,
+        ];
+        let evaluation = evaluate_existential_claim(
+            &claim,
+            &timestamp("2026-07-10T12:08:00Z")?,
+            CompletenessStatus::Complete,
+            &executions,
+            0,
+        )?;
+        let replacement_evidence = Sha256Digest::from_bytes([73; 32]);
+        assert!(matches!(
+            decide_dispute(
+                &claim,
+                &predecessor,
+                &dispute,
+                "local-demo-operator",
+                DisputeDecisionKind::AcceptedSupersededBeforeFinality,
+                "Two deterministic verifier replays accept the eligible counterexample.".to_owned(),
+                vec![Sha256Digest::from_bytes([74; 32])],
+                Some(replacement_evidence),
+                Some(Sha256Digest::from_bytes([75; 32])),
+                Some(&evaluation),
+                timestamp("2026-07-10T12:09:00Z")?,
+            ),
+            Err(ResolutionError::SupersessionBindingMismatch)
+        ));
+        let decision = decide_dispute(
+            &claim,
+            &predecessor,
+            &dispute,
+            "local-demo-operator",
+            DisputeDecisionKind::AcceptedSupersededBeforeFinality,
+            "Two deterministic verifier replays accept the eligible counterexample.".to_owned(),
+            vec![Sha256Digest::from_bytes([74; 32])],
+            Some(replacement_evidence),
+            Some(resolution_aggregation_digest(&evaluation)?),
+            Some(&evaluation),
+            timestamp("2026-07-10T12:09:00Z")?,
+        )?;
+        assert_eq!(dispute.status, DisputeStatus::Open);
+
+        let signer_a = DevelopmentSigner::generate("attestor-a", "key-a")?;
+        let signer_b = DevelopmentSigner::generate("attestor-b", "key-b")?;
+        let mut registry = AttestorRegistry::default();
+        for (signer, signer_id, key_id) in [
+            (&signer_a, "attestor-a", "key-a"),
+            (&signer_b, "attestor-b", "key-b"),
+        ] {
+            registry.register(RegisteredAttestor {
+                signer_id: signer_id.to_owned(),
+                key_id: key_id.to_owned(),
+                verifying_key: signer.verifying_key(),
+                active_from: timestamp("2026-07-10T00:00:00Z")?,
+                revoked_at: None,
+            });
+        }
+        let policy_digest =
+            domain_separated_digest("hsai.resolution-policy.v1", &claim.resolution_policy)?;
+        let claim_spec_digest = claim.claim_spec_digest()?;
+        let sign = |signer: &DevelopmentSigner,
+                    finality: ResolutionFinality,
+                    issued_at: UtcTimestamp,
+                    sequence: u64| {
+            signer.sign_attestation_superseding(
+                claim.claim_id.clone(),
+                claim_spec_digest,
+                ClaimTruth::True,
+                finality,
+                policy_digest,
+                replacement_evidence,
+                evaluation.qualifying_run_digests.clone(),
+                None,
+                start.clone(),
+                end.clone(),
+                issued_at,
+                sequence,
+                Some(predecessor.record_digest),
+            )
+        };
+        let provisional_attestations = vec![
+            sign(
+                &signer_a,
+                ResolutionFinality::Provisional,
+                decision.decided_at.clone(),
+                2,
+            )?,
+            sign(
+                &signer_b,
+                ResolutionFinality::Provisional,
+                decision.decided_at.clone(),
+                2,
+            )?,
+        ];
+        assert!(matches!(
+            propose_resolution(
+                &claim,
+                &evaluation,
+                replacement_evidence,
+                &provisional_attestations,
+                &registry,
+                &decision.decided_at,
+            ),
+            Err(ResolutionError::AttestationBindingMismatch)
+        ));
+        let replacement = propose_superseding_resolution(
+            &claim,
+            &predecessor,
+            &decision,
+            &evaluation,
+            replacement_evidence,
+            &provisional_attestations,
+            &registry,
+        )?;
+        let link = link_resolution_supersession(
+            &predecessor,
+            &decision,
+            &replacement,
+            decision.decided_at.clone(),
+        )?;
+        assert_eq!(
+            link.predecessor_resolution_digest,
+            predecessor.record_digest
+        );
+
+        let finalized_at = timestamp("2026-07-10T12:16:00Z")?;
+        let final_attestations = vec![
+            sign(
+                &signer_a,
+                ResolutionFinality::Final,
+                finalized_at.clone(),
+                3,
+            )?,
+            sign(
+                &signer_b,
+                ResolutionFinality::Final,
+                finalized_at.clone(),
+                3,
+            )?,
+        ];
+        let final_record = finalize_superseding_resolution(
+            &claim,
+            &predecessor,
+            &replacement,
+            &finalized_at,
+            false,
+            &final_attestations,
+            &registry,
+        )?;
+        assert_eq!(
+            (final_record.truth, final_record.finality),
+            (ClaimTruth::True, ResolutionFinality::Final)
+        );
+        assert!(
+            link_resolution_supersession(&final_record, &decision, &replacement, finalized_at,)
+                .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn contract_accepted_dispute_rejects_missing_counterexample_and_unbounded_payload()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let claim = local_demo_claim_draft()?.freeze()?;
+        let start = timestamp("2026-07-10T12:05:00Z")?;
+        let predecessor = build_record(
+            &claim,
+            ClaimTruth::False,
+            ResolutionFinality::Provisional,
+            Sha256Digest::from_bytes([80; 32]),
+            &[],
+            start.clone(),
+            timestamp("2026-07-10T12:15:00Z")?,
+        )?;
+        let dispute = open_dispute(
+            &claim,
+            &predecessor,
+            "challenger",
+            "COUNTEREXAMPLE",
+            vec![Sha256Digest::from_bytes([81; 32])],
+            None,
+            timestamp("2026-07-10T12:06:00Z")?,
+        )?;
+        let evaluation = ResolutionEvaluation {
+            truth: ClaimTruth::True,
+            qualifying_run_digests: vec![Sha256Digest::from_bytes([82; 32])],
+            blockers: Vec::new(),
+        };
+        assert!(matches!(
+            decide_dispute(
+                &claim,
+                &predecessor,
+                &dispute,
+                "local-demo-operator",
+                DisputeDecisionKind::AcceptedSupersededBeforeFinality,
+                "valid rationale".to_owned(),
+                vec![Sha256Digest::from_bytes([83; 32])],
+                Some(Sha256Digest::from_bytes([84; 32])),
+                Some(Sha256Digest::from_bytes([85; 32])),
+                Some(&evaluation),
+                timestamp("2026-07-10T12:07:00Z")?,
+            ),
+            Err(ResolutionError::InvalidDisputeDecision)
+        ));
+        assert!(matches!(
+            decide_dispute(
+                &claim,
+                &predecessor,
+                &dispute,
+                "local-demo-operator",
+                DisputeDecisionKind::Rejected,
+                " ".to_owned(),
+                vec![],
+                None,
+                None,
+                None,
+                timestamp("2026-07-10T12:07:00Z")?,
+            ),
+            Err(ResolutionError::InvalidDisputePayload)
+        ));
         Ok(())
     }
 }

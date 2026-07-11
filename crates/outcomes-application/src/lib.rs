@@ -7,17 +7,20 @@ use hyperliquid_hip4::{Hip4Error, Hip4MockBackend, capability_matrix, parse_outc
 use outcomes_blobstore::{BlobStoreError, FileBlobStore};
 use outcomes_corpus::{ChallengeCorpusAdapter, CorpusError, LocalFixtureCorpus};
 use outcomes_domain::{
-    ClaimSpecError, ClaimTruth, EvidenceClassification, ExecutionManifestV1, ExecutionOutcome,
-    ReconciliationStatus, ResolutionAttestationV1, ResolutionFinality, SettlementNetwork,
-    Sha256Digest, UtcTimestamp, domain_separated_digest, fixtures::local_demo_claim_draft,
+    ClaimSpecError, ClaimTruth, DisputeDecisionKind, EvidenceClassification, ExecutionManifestV1,
+    ExecutionOutcome, ReconciliationStatus, ResolutionAttestationV1, ResolutionFinality,
+    SettlementNetwork, Sha256Digest, UtcTimestamp, domain_separated_digest,
+    fixtures::local_demo_claim_draft,
 };
 use outcomes_evidence::{
     AttestorRegistry, DevelopmentSigner, EvidenceBundleInput, EvidenceError, RegisteredAttestor,
     build_evidence_bundle, verify_evidence_bundle,
 };
 use outcomes_resolution::{
-    ResolutionError, ResolutionEvaluation, evaluate_existential_claim, finalize_resolution,
-    propose_resolution,
+    ResolutionError, ResolutionEvaluation, decide_dispute, evaluate_existential_claim,
+    finalize_resolution, finalize_superseding_resolution, link_resolution_supersession,
+    open_dispute, propose_resolution, propose_superseding_resolution,
+    resolution_aggregation_digest,
 };
 use outcomes_runner::{
     RunnerError, RunnerRequest, ScriptedRunner, VerificationRunner, evaluate_admission,
@@ -37,6 +40,8 @@ pub enum LocalScenario {
     True,
     /// A deterministic rejection remains unresolved before a later valid candidate finalizes true.
     InvalidThenValid,
+    /// A counterexample supersedes a disputed provisional false before finality.
+    DisputedFalseCounterexampleTrue,
     /// Complete empty observation finalizes false after deadline and grace.
     False,
     /// Runner error leaves truth unresolved and settlement-ineligible.
@@ -128,6 +133,9 @@ pub fn run_local_scenario(
     artifact_root: &Path,
 ) -> Result<ScenarioReport, ApplicationError> {
     let claim = local_demo_claim_draft()?.freeze()?;
+    if scenario == LocalScenario::DisputedFalseCounterexampleTrue {
+        return run_disputed_false_counterexample_true(&claim, artifact_root);
+    }
     run_scenario_with_runner(scenario, artifact_root, &claim, None)
 }
 
@@ -148,6 +156,342 @@ pub fn run_local_true_scenario_with_runner(
 ) -> Result<ScenarioReport, ApplicationError> {
     claim.verify_identity()?;
     run_scenario_with_runner(LocalScenario::True, artifact_root, claim, Some(runner))
+}
+
+#[allow(clippy::too_many_lines)]
+fn run_disputed_false_counterexample_true(
+    claim: &outcomes_domain::ClaimSpecV1,
+    artifact_root: &Path,
+) -> Result<ScenarioReport, ApplicationError> {
+    let cutoff = timestamp("2026-07-10T12:05:00Z")?;
+    let proposed_at = timestamp("2026-07-10T12:06:00Z")?;
+    let dispute_end = proposed_at.checked_add_seconds(claim.dispute_policy.window_seconds)?;
+
+    // The first adapter view is intentionally faulty: it attests COMPLETE while
+    // omitting a candidate already present in the independent authoritative view.
+    // No timestamp is changed when the counterexample is later presented.
+    let mut faulty_ledger =
+        LocalSubmissionLedger::new(claim.claim_id.clone(), timestamp("2026-07-10T10:00:00Z")?);
+    faulty_ledger.finalize_through(cutoff.clone());
+    let original_observation =
+        faulty_ledger.snapshot(None, &cutoff, &timestamp("2026-07-10T12:05:01Z")?)?;
+    let original_evaluation =
+        evaluate_existential_claim(claim, &cutoff, original_observation.completeness, &[], 0)?;
+    if original_evaluation.truth != ClaimTruth::False {
+        return Err(ApplicationError::ScenarioInvariant(
+            "faulty complete empty observation must propose false",
+        ));
+    }
+    let (original_bundle, original_blobs) = build_application_bundle(
+        claim,
+        std::slice::from_ref(&original_observation),
+        &[],
+        &[],
+        &[],
+        &[],
+        &original_evaluation,
+        Vec::new(),
+        artifact_root,
+    )?;
+    verify_evidence_bundle(&original_bundle, &original_blobs)?;
+
+    let signer_a = DevelopmentSigner::generate("attestor-a", "key-a")?;
+    let signer_b = DevelopmentSigner::generate("attestor-b", "key-b")?;
+    let mut registry = AttestorRegistry::default();
+    register_signers(
+        &mut registry,
+        [
+            (&signer_a, "attestor-a", "key-a"),
+            (&signer_b, "attestor-b", "key-b"),
+        ],
+    )?;
+    let policy_digest =
+        domain_separated_digest("hsai.resolution-policy.v1", &claim.resolution_policy)?;
+    let original_attestations = sign_pair(
+        [&signer_a, &signer_b],
+        claim,
+        &original_evaluation,
+        ResolutionFinality::Provisional,
+        policy_digest,
+        original_bundle.bundle_digest,
+        original_bundle.completeness_assessment_digest,
+        &proposed_at,
+        &dispute_end,
+        &proposed_at,
+        1,
+    )?;
+    let original_provisional = propose_resolution(
+        claim,
+        &original_evaluation,
+        original_bundle.bundle_digest,
+        &original_attestations,
+        &registry,
+        &proposed_at,
+    )?;
+
+    let market = parse_outcome_meta(
+        SettlementNetwork::Mock,
+        include_bytes!("../../../fixtures/hip4/outcome-meta.json"),
+    )?;
+    let capabilities = capability_matrix(SettlementNetwork::Mock, proposed_at.clone());
+    let binding = bind_market(
+        claim,
+        &market,
+        0,
+        1,
+        domain_separated_digest("hsai.backend-capability.v1", &capabilities)?,
+        "local-demo-operator",
+        proposed_at.clone(),
+        "development-binding-signature".to_owned(),
+    )?;
+    let refused = preflight(
+        &binding,
+        &original_provisional,
+        market.metadata_digest,
+        &capabilities,
+    );
+    if refused.ready
+        || !refused
+            .blockers
+            .iter()
+            .any(|value| value == "FINAL_RESOLUTION_REQUIRED")
+    {
+        return Err(ApplicationError::ScenarioInvariant(
+            "provisional false must not be settlement-ready",
+        ));
+    }
+
+    let mut authoritative_ledger =
+        LocalSubmissionLedger::new(claim.claim_id.clone(), timestamp("2026-07-10T10:00:00Z")?);
+    let candidate = authoritative_ledger.ingest(
+        claim.claim_id.clone(),
+        "local.authoritative",
+        "counterexample-1",
+        "1",
+        None,
+        timestamp("2026-07-10T11:55:00Z")?,
+        timestamp("2026-07-10T11:56:00Z")?,
+        "application/octet-stream",
+        b"hsai-pass-v1".to_vec(),
+    )?;
+    authoritative_ledger.finalize_through(cutoff.clone());
+    let dispute = open_dispute(
+        claim,
+        &original_provisional,
+        "local-demo-operator",
+        "COUNTEREXAMPLE",
+        vec![candidate.artifact_digest],
+        Some(candidate.artifact_digest),
+        timestamp("2026-07-10T12:08:00Z")?,
+    )?;
+    if !matches!(
+        finalize_resolution(
+            claim,
+            &original_provisional,
+            &dispute_end,
+            true,
+            false,
+            &original_attestations,
+            &registry,
+        ),
+        Err(ResolutionError::BlockingDispute)
+    ) {
+        return Err(ApplicationError::ScenarioInvariant(
+            "open dispute must block original finalization",
+        ));
+    }
+
+    let admission = evaluate_admission(claim, &candidate)?;
+    let mut runner = ScriptedRunner::exact_bytes_fixture();
+    let mut executions = Vec::new();
+    for index in 0..2 {
+        let started = timestamp("2026-07-10T12:09:00Z")?;
+        let ended = timestamp("2026-07-10T12:09:01Z")?;
+        executions.push(runner.execute(&RunnerRequest {
+            claim,
+            candidate: &candidate,
+            candidate_bytes: b"hsai-pass-v1",
+            admission: &admission,
+            run_id: &format!("counterexample-run-{index}"),
+            started_at: &started,
+            ended_at: &ended,
+            logical_time: &started,
+        })?);
+    }
+    let corrected_observation =
+        authoritative_ledger.snapshot(None, &cutoff, &timestamp("2026-07-10T12:09:02Z")?)?;
+    let replacement_evaluation = evaluate_existential_claim(
+        claim,
+        &cutoff,
+        corrected_observation.completeness,
+        &executions,
+        0,
+    )?;
+    let lineage_payloads = vec![
+        serde_json::to_vec(&original_bundle)?,
+        serde_json::to_vec(&original_provisional)?,
+        serde_json::to_vec(&dispute)?,
+    ];
+    let (replacement_bundle, replacement_blobs) = build_application_bundle(
+        claim,
+        &[original_observation, corrected_observation],
+        std::slice::from_ref(&candidate),
+        std::slice::from_ref(&admission),
+        &executions,
+        &[dispute.record_digest],
+        &replacement_evaluation,
+        lineage_payloads,
+        artifact_root,
+    )?;
+    verify_evidence_bundle(&replacement_bundle, &replacement_blobs)?;
+    let decision = decide_dispute(
+        claim,
+        &original_provisional,
+        &dispute,
+        "local-demo-operator",
+        DisputeDecisionKind::AcceptedSupersededBeforeFinality,
+        "pinned pre-cutoff counterexample passed both required replays".to_owned(),
+        vec![candidate.artifact_digest],
+        Some(replacement_bundle.bundle_digest),
+        Some(resolution_aggregation_digest(&replacement_evaluation)?),
+        Some(&replacement_evaluation),
+        timestamp("2026-07-10T12:10:00Z")?,
+    )?;
+    // The terminal decision binds bundle B, so including the decision in B
+    // would create a digest cycle. It is exported alongside the acyclic bundle.
+    let replacement_attestations = sign_superseding_pair(
+        [&signer_a, &signer_b],
+        claim,
+        &replacement_evaluation,
+        ResolutionFinality::Provisional,
+        policy_digest,
+        replacement_bundle.bundle_digest,
+        replacement_bundle.completeness_assessment_digest,
+        &proposed_at,
+        &dispute_end,
+        &timestamp("2026-07-10T12:10:01Z")?,
+        2,
+        original_provisional.record_digest,
+    )?;
+    let replacement_provisional = propose_superseding_resolution(
+        claim,
+        &original_provisional,
+        &decision,
+        &replacement_evaluation,
+        replacement_bundle.bundle_digest,
+        &replacement_attestations,
+        &registry,
+    )?;
+    let final_attestations = sign_superseding_pair(
+        [&signer_a, &signer_b],
+        claim,
+        &replacement_evaluation,
+        ResolutionFinality::Final,
+        policy_digest,
+        replacement_bundle.bundle_digest,
+        replacement_bundle.completeness_assessment_digest,
+        &proposed_at,
+        &dispute_end,
+        &dispute_end,
+        3,
+        original_provisional.record_digest,
+    )?;
+    let final_record = finalize_superseding_resolution(
+        claim,
+        &original_provisional,
+        &replacement_provisional,
+        &dispute_end,
+        false,
+        &final_attestations,
+        &registry,
+    )?;
+    let supersession = link_resolution_supersession(
+        &original_provisional,
+        &decision,
+        &final_record,
+        dispute_end.clone(),
+    )?;
+    let ready = preflight(
+        &binding,
+        &final_record,
+        market.metadata_digest,
+        &capabilities,
+    );
+    let intent = build_intent(
+        &binding,
+        &final_record,
+        &ready,
+        dispute_end.checked_add_seconds(3_600)?,
+    )?;
+    let mut backend = Hip4MockBackend::default();
+    let receipt = backend.submit(&intent, dispute_end.clone())?;
+    let retry = backend.submit(&intent, dispute_end.clone())?;
+    if receipt != retry || backend.effect_count() != 1 {
+        return Err(ApplicationError::ScenarioInvariant(
+            "mock settlement must effect exactly once",
+        ));
+    }
+    let reconciliation =
+        backend.reconcile(&binding, &final_record, dispute_end.checked_add_seconds(1)?)?;
+    fs::create_dir_all(artifact_root)?;
+    for (name, value) in [
+        (
+            "original-evidence-bundle.json",
+            serde_json::to_value(&original_bundle)?,
+        ),
+        (
+            "original-provisional-false.json",
+            serde_json::to_value(&original_provisional)?,
+        ),
+        (
+            "original-settlement-preflight-refused.json",
+            serde_json::to_value(&refused)?,
+        ),
+        (
+            "counterexample-dispute.json",
+            serde_json::to_value(&dispute)?,
+        ),
+        (
+            "replacement-evidence-bundle.json",
+            serde_json::to_value(&replacement_bundle)?,
+        ),
+        (
+            "counterexample-decision.json",
+            serde_json::to_value(&decision)?,
+        ),
+        (
+            "replacement-provisional-true.json",
+            serde_json::to_value(&replacement_provisional)?,
+        ),
+        (
+            "final-resolution.json",
+            serde_json::to_value(&final_record)?,
+        ),
+        (
+            "resolution-supersession.json",
+            serde_json::to_value(&supersession)?,
+        ),
+        ("settlement-intent.json", serde_json::to_value(&intent)?),
+        ("mock-receipt.json", serde_json::to_value(&receipt)?),
+        (
+            "mock-reconciliation.json",
+            serde_json::to_value(&reconciliation)?,
+        ),
+    ] {
+        fs::write(artifact_root.join(name), serde_json::to_vec_pretty(&value)?)?;
+    }
+    Ok(ScenarioReport {
+        claim_id: claim.claim_id.to_string(),
+        execution_outcomes: execution_outcomes(&executions),
+        truth: final_record.truth,
+        finality: final_record.finality,
+        evidence_bundle_digest: replacement_bundle.bundle_digest,
+        evidence_verified: true,
+        external_effect: "one idempotent mock HIP-4 effect after accepted pre-finality supersession; reconciled CONFIRMED".to_owned(),
+        mock_effect_count: backend.effect_count(),
+        reconciliation_status: Some(reconciliation.status),
+        evidence_bundle_file: "replacement-evidence-bundle.json".to_owned(),
+    })
 }
 
 #[allow(clippy::too_many_lines)]
@@ -174,6 +518,9 @@ fn run_scenario_with_runner(
                 ("submission-2", b"hsai-pass-v1", 2),
             ],
             LocalScenario::RunnerError => vec![("submission-1", b"hsai-error-v1", 1)],
+            LocalScenario::DisputedFalseCounterexampleTrue => {
+                unreachable!("dispute scenario has a dedicated composition")
+            }
             LocalScenario::False => unreachable!("false has no candidates"),
         };
         let mut scripted_runner = ScriptedRunner::exact_bytes_fixture();
@@ -264,6 +611,9 @@ fn run_scenario_with_runner(
                 timestamp("2026-07-10T12:05:00Z")?,
                 timestamp("2026-07-10T12:05:01Z")?,
             )
+        }
+        LocalScenario::DisputedFalseCounterexampleTrue => {
+            unreachable!("dispute scenario has a dedicated composition")
         }
     };
     let observation = ledger.snapshot(None, &cutoff, &observed_at)?;
@@ -544,6 +894,147 @@ fn evidence_payloads(
     Ok(payloads)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn build_application_bundle(
+    claim: &outcomes_domain::ClaimSpecV1,
+    observations: &[outcomes_domain::ObservationSnapshotV1],
+    candidates: &[outcomes_domain::CandidateEnvelopeV1],
+    admissions: &[outcomes_domain::AdmissionDecisionV1],
+    executions: &[ExecutionManifestV1],
+    dispute_record_digests: &[Sha256Digest],
+    evaluation: &ResolutionEvaluation,
+    extra_payloads: Vec<Vec<u8>>,
+    artifact_root: &Path,
+) -> Result<
+    (
+        outcomes_domain::OutcomeEvidenceBundleV1,
+        HashMap<Sha256Digest, Vec<u8>>,
+    ),
+    ApplicationError,
+> {
+    let store = FileBlobStore::new(artifact_root);
+    let mut bytes_by_digest = HashMap::new();
+    let mut references = Vec::new();
+    let mut payloads = Vec::new();
+    for observation in observations {
+        payloads.push(serde_json::to_vec(observation)?);
+    }
+    payloads.extend(
+        candidates
+            .iter()
+            .map(serde_json::to_vec)
+            .collect::<Result<Vec<_>, _>>()?,
+    );
+    payloads.extend(
+        admissions
+            .iter()
+            .map(serde_json::to_vec)
+            .collect::<Result<Vec<_>, _>>()?,
+    );
+    payloads.extend(
+        executions
+            .iter()
+            .map(serde_json::to_vec)
+            .collect::<Result<Vec<_>, _>>()?,
+    );
+    payloads.extend(extra_payloads);
+    for bytes in payloads {
+        let reference = store.put(&bytes, "application/json", EvidenceClassification::Public)?;
+        bytes_by_digest.insert(reference.digest, bytes);
+        references.push(reference);
+    }
+    let execution_digests = executions
+        .iter()
+        .map(|value| domain_separated_digest("hsai.execution-manifest.v1", value))
+        .collect::<Result<Vec<_>, _>>()?;
+    let qualifying_candidates = candidates
+        .iter()
+        .filter(|candidate| {
+            executions
+                .iter()
+                .zip(&execution_digests)
+                .any(|(run, digest)| {
+                    run.candidate_digest == candidate.artifact_digest
+                        && evaluation.qualifying_run_digests.contains(digest)
+                })
+        })
+        .map(|value| value.artifact_digest)
+        .collect();
+    let completeness_assessment_digest = domain_separated_digest(
+        "hsai.completeness-assessment.v1",
+        &observations
+            .iter()
+            .map(|value| (value.completeness, value.completeness_reason.as_str()))
+            .collect::<Vec<_>>(),
+    )?;
+    let bundle = build_evidence_bundle(EvidenceBundleInput {
+        claim_id: claim.claim_id.clone(),
+        claim_spec_digest: claim.claim_spec_digest()?,
+        challenge_descriptor_digest: claim.challenge_descriptor_digest,
+        observation_snapshot_digests: observations
+            .iter()
+            .map(|value| domain_separated_digest("hsai.observation-snapshot.v1", value))
+            .collect::<Result<Vec<_>, _>>()?,
+        completeness_assessment_digest,
+        qualifying_candidate_digests: qualifying_candidates,
+        admission_decision_digests: admissions
+            .iter()
+            .map(|value| value.decision_digest)
+            .collect(),
+        execution_manifest_digests: execution_digests,
+        resolution_aggregation_digest: resolution_aggregation_digest(evaluation)?,
+        dispute_record_digests: dispute_record_digests.to_vec(),
+        code_build_provenance_digest: domain_separated_digest(
+            "hsai.build-provenance.v1",
+            &env!("CARGO_PKG_VERSION"),
+        )?,
+        evidence_publication_policy_digest: domain_separated_digest(
+            "hsai.evidence-publication-policy.v1",
+            &claim.evidence_publication_policy,
+        )?,
+        blobs: references,
+    })?;
+    Ok((bundle, bytes_by_digest))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn sign_superseding_pair(
+    signers: [&DevelopmentSigner; 2],
+    claim: &outcomes_domain::ClaimSpecV1,
+    evaluation: &ResolutionEvaluation,
+    finality: ResolutionFinality,
+    policy_digest: Sha256Digest,
+    evidence_digest: Sha256Digest,
+    completeness_digest: Sha256Digest,
+    dispute_start: &UtcTimestamp,
+    dispute_end: &UtcTimestamp,
+    issued_at: &UtcTimestamp,
+    sequence: u64,
+    predecessor_digest: Sha256Digest,
+) -> Result<Vec<ResolutionAttestationV1>, ApplicationError> {
+    let claim_digest = claim.claim_spec_digest()?;
+    signers
+        .into_iter()
+        .map(|signer| -> Result<_, ApplicationError> {
+            Ok(signer.sign_attestation_superseding(
+                claim.claim_id.clone(),
+                claim_digest,
+                evaluation.truth,
+                finality,
+                policy_digest,
+                evidence_digest,
+                evaluation.qualifying_run_digests.clone(),
+                Some(completeness_digest),
+                dispute_start.clone(),
+                dispute_end.clone(),
+                issued_at.clone(),
+                sequence,
+                Some(predecessor_digest),
+            )?)
+        })
+        .collect()
+}
+
 fn execution_outcomes(executions: &[ExecutionManifestV1]) -> Vec<ExecutionOutcome> {
     executions
         .iter()
@@ -691,6 +1182,74 @@ mod tests {
             bundle["blobs"].as_array().map(Vec::len),
             Some(8),
             "observation, both candidates/admissions, and all three executions must be retained"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn acceptance_counterexample_supersedes_provisional_false_and_settles_true_once()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let report = run_local_scenario(
+            LocalScenario::DisputedFalseCounterexampleTrue,
+            directory.path(),
+        )?;
+        assert_eq!(
+            report.execution_outcomes,
+            vec![ExecutionOutcome::Pass, ExecutionOutcome::Pass]
+        );
+        assert_eq!(report.truth, ClaimTruth::True);
+        assert_eq!(report.finality, ResolutionFinality::Final);
+        assert!(report.evidence_verified);
+        assert_eq!(report.mock_effect_count, 1);
+        assert_eq!(
+            report.reconciliation_status,
+            Some(ReconciliationStatus::Confirmed)
+        );
+        for name in [
+            "original-evidence-bundle.json",
+            "original-provisional-false.json",
+            "original-settlement-preflight-refused.json",
+            "counterexample-dispute.json",
+            "replacement-evidence-bundle.json",
+            "counterexample-decision.json",
+            "replacement-provisional-true.json",
+            "final-resolution.json",
+            "resolution-supersession.json",
+            "settlement-intent.json",
+            "mock-receipt.json",
+            "mock-reconciliation.json",
+        ] {
+            assert!(directory.path().join(name).is_file(), "missing {name}");
+        }
+        let predecessor: serde_json::Value = serde_json::from_slice(&fs::read(
+            directory.path().join("original-provisional-false.json"),
+        )?)?;
+        assert_eq!(predecessor["truth"], "FALSE");
+        assert_eq!(predecessor["finality"], "PROVISIONAL");
+        let refused: serde_json::Value = serde_json::from_slice(&fs::read(
+            directory
+                .path()
+                .join("original-settlement-preflight-refused.json"),
+        )?)?;
+        assert_eq!(refused["ready"], false);
+        assert!(refused["blockers"].as_array().is_some_and(|values| {
+            values
+                .iter()
+                .any(|value| value == "FINAL_RESOLUTION_REQUIRED")
+        }));
+        assert!(
+            !directory
+                .path()
+                .join("original-settlement-intent.json")
+                .exists()
+        );
+        let successor: serde_json::Value = serde_json::from_slice(&fs::read(
+            directory.path().join("resolution-supersession.json"),
+        )?)?;
+        assert_eq!(
+            successor["predecessor_resolution_digest"],
+            predecessor["record_digest"]
         );
         Ok(())
     }

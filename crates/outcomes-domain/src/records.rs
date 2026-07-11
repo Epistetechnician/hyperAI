@@ -438,6 +438,48 @@ pub struct DisputeRecordV1 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum DisputeDecisionKind {
+    Rejected,
+    AcceptedSupersededBeforeFinality,
+    UnresolvedEscalated,
+}
+
+/// Immutable terminal decision for an immutable open dispute.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DisputeDecisionRecordV1 {
+    pub schema_version: String,
+    pub decision_id: String,
+    pub dispute_id: String,
+    pub claim_id: ClaimId,
+    pub open_dispute_digest: Sha256Digest,
+    pub provisional_resolution_digest: Sha256Digest,
+    pub authority_id: String,
+    pub decided_at: UtcTimestamp,
+    pub decision: DisputeDecisionKind,
+    pub rationale: String,
+    pub decision_evidence_digests: Vec<Sha256Digest>,
+    pub recomputation_evidence_bundle_digest: Option<Sha256Digest>,
+    pub recomputation_aggregation_digest: Option<Sha256Digest>,
+    pub record_digest: Sha256Digest,
+}
+
+/// Append-only edge from a non-final predecessor to its replacement.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ResolutionSupersessionRecordV1 {
+    pub schema_version: String,
+    pub supersession_id: String,
+    pub claim_id: ClaimId,
+    pub predecessor_resolution_digest: Sha256Digest,
+    pub dispute_decision_digest: Sha256Digest,
+    pub successor_resolution_digest: Sha256Digest,
+    pub linked_at: UtcTimestamp,
+    pub record_digest: Sha256Digest,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum SettlementNetwork {
     Mock,
     HyperliquidTestnet,

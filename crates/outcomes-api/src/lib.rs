@@ -196,6 +196,7 @@ async fn run_demo(
     let scenario = match scenario.as_str() {
         "true" => LocalScenario::True,
         "invalid-then-valid" => LocalScenario::InvalidThenValid,
+        "disputed-false-counterexample-true" => LocalScenario::DisputedFalseCounterexampleTrue,
         "false" => LocalScenario::False,
         "runner-error" => LocalScenario::RunnerError,
         _ => return Err(ApiError::UnknownScenario),
@@ -786,6 +787,32 @@ mod tests {
         );
         assert_eq!(report.truth, outcomes_domain::ClaimTruth::True);
         assert_eq!(report.mock_effect_count, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn contract_disputed_false_counterexample_demo_reports_superseding_true()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let response = test_router(directory.path().to_path_buf())?
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/demo/disputed-false-counterexample-true")
+                    .header("x-hsai-role", "operator")
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        let report: ScenarioReport =
+            serde_json::from_slice(&to_bytes(response.into_body(), 1_048_576).await?)?;
+        assert_eq!(report.truth, outcomes_domain::ClaimTruth::True);
+        assert_eq!(report.finality, outcomes_domain::ResolutionFinality::Final);
+        assert_eq!(report.mock_effect_count, 1);
+        assert_eq!(
+            report.reconciliation_status,
+            Some(outcomes_domain::ReconciliationStatus::Confirmed)
+        );
         Ok(())
     }
 

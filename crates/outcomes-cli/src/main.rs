@@ -131,6 +131,7 @@ enum DemoCommand {
 enum ScenarioArg {
     True,
     InvalidThenValid,
+    DisputedFalseCounterexampleTrue,
     False,
     RunnerError,
 }
@@ -516,6 +517,9 @@ fn run_demo(args: DemoArgs) -> Result<Value, CliError> {
             let scenario = match scenario {
                 ScenarioArg::True => LocalScenario::True,
                 ScenarioArg::InvalidThenValid => LocalScenario::InvalidThenValid,
+                ScenarioArg::DisputedFalseCounterexampleTrue => {
+                    LocalScenario::DisputedFalseCounterexampleTrue
+                }
                 ScenarioArg::False => LocalScenario::False,
                 ScenarioArg::RunnerError => LocalScenario::RunnerError,
             };
@@ -747,6 +751,29 @@ mod tests {
             json!(["FAIL", "PASS", "PASS"])
         );
         assert_eq!(output["truth"], "TRUE");
+        assert_eq!(output["mock_effect_count"], 1);
+        Ok(())
+    }
+
+    #[test]
+    fn contract_cli_disputed_false_counterexample_reports_superseding_true()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let output = run(Cli {
+            command: RootCommand::Outcomes(OutcomesArgs {
+                command: OutcomesCommand::Demo(DemoArgs {
+                    command: DemoCommand::ComputationalMarket {
+                        scenario: ScenarioArg::DisputedFalseCounterexampleTrue,
+                        artifact_root: directory.path().to_path_buf(),
+                        json: true,
+                    },
+                }),
+            }),
+        })
+        .map_err(|error| std::io::Error::other(error.message))?;
+        assert_eq!(output["execution_outcomes"], json!(["PASS", "PASS"]));
+        assert_eq!(output["truth"], "TRUE");
+        assert_eq!(output["finality"], "FINAL");
         assert_eq!(output["mock_effect_count"], 1);
         Ok(())
     }

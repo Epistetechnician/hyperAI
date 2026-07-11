@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ResolutionSupersessionRecordV1",
+  "description": "Append-only edge from a non-final predecessor to its replacement.",
+  "type": "object",
+  "properties": {
+    "claim_id": {
+      "$ref": "#/$defs/ClaimId"
+    },
+    "dispute_decision_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "linked_at": {
+      "$ref": "#/$defs/UtcTimestamp"
+    },
+    "predecessor_resolution_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "record_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "successor_resolution_digest": {
+      "$ref": "#/$defs/Sha256Digest"
+    },
+    "supersession_id": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "supersession_id",
+    "claim_id",
+    "predecessor_resolution_digest",
+    "dispute_decision_digest",
+    "successor_resolution_digest",
+    "linked_at",
+    "record_digest"
+  ],
+  "$defs": {
+    "ClaimId": {
+      "description": "A claim ID derived from a claim-spec digest.",
+      "type": "string"
+    },
+    "Sha256Digest": {
+      "description": "A SHA-256 digest serialized as 64 lowercase hexadecimal characters.",
+      "type": "string"
+    },
+    "UtcTimestamp": {
+      "description": "A canonical UTC RFC 3339 timestamp with whole-second precision.",
+      "type": "string"
+    }
+  }
+}

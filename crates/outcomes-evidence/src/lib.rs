@@ -270,6 +270,46 @@ impl DevelopmentSigner {
         issued_at: UtcTimestamp,
         logical_sequence: u64,
     ) -> Result<ResolutionAttestationV1, EvidenceError> {
+        self.sign_attestation_superseding(
+            claim_id,
+            claim_spec_digest,
+            truth,
+            finality,
+            resolution_policy_digest,
+            evidence_bundle_digest,
+            qualifying_run_digests,
+            completeness_evidence_digest,
+            dispute_window_start,
+            dispute_window_end,
+            issued_at,
+            logical_sequence,
+            None,
+        )
+    }
+
+    /// Sign an attestation that explicitly replaces a non-settling record.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the unsigned attestation payload cannot be
+    /// canonicalized.
+    #[allow(clippy::too_many_arguments)]
+    pub fn sign_attestation_superseding(
+        &self,
+        claim_id: ClaimId,
+        claim_spec_digest: Sha256Digest,
+        truth: ClaimTruth,
+        finality: ResolutionFinality,
+        resolution_policy_digest: Sha256Digest,
+        evidence_bundle_digest: Sha256Digest,
+        qualifying_run_digests: Vec<Sha256Digest>,
+        completeness_evidence_digest: Option<Sha256Digest>,
+        dispute_window_start: UtcTimestamp,
+        dispute_window_end: UtcTimestamp,
+        issued_at: UtcTimestamp,
+        logical_sequence: u64,
+        supersedes_non_settling_record: Option<Sha256Digest>,
+    ) -> Result<ResolutionAttestationV1, EvidenceError> {
         let payload = AttestationPayload {
             schema_version: "hsai.resolution-attestation.v1",
             claim_id: &claim_id,
@@ -287,7 +327,7 @@ impl DevelopmentSigner {
             signer_id: &self.signer_id,
             key_id: &self.key_id,
             algorithm: "Ed25519",
-            supersedes_non_settling_record: None,
+            supersedes_non_settling_record,
         };
         let message = attestation_signing_message(&payload)?;
         let signature = self.key.sign(&message);
@@ -309,7 +349,7 @@ impl DevelopmentSigner {
             key_id: self.key_id.clone(),
             algorithm: "Ed25519".to_owned(),
             signature: STANDARD.encode(signature.to_bytes()),
-            supersedes_non_settling_record: None,
+            supersedes_non_settling_record,
         })
     }
 }
@@ -629,6 +669,43 @@ mod tests {
         assert!(matches!(
             verify_quorum(&[attestation.clone(), attestation], &registry, 2),
             Err(EvidenceError::DuplicateSigner(_))
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn contract_supersession_digest_is_signed() -> Result<(), Box<dyn std::error::Error>> {
+        let claim = local_demo_claim_draft()?.freeze()?;
+        let signer = DevelopmentSigner::generate("attestor-a", "key-a")?;
+        let mut registry = AttestorRegistry::default();
+        registry.register(RegisteredAttestor {
+            signer_id: "attestor-a".to_owned(),
+            key_id: "key-a".to_owned(),
+            verifying_key: signer.verifying_key(),
+            active_from: timestamp("2026-07-10T00:00:00Z")?,
+            revoked_at: None,
+        });
+        let predecessor = Sha256Digest::from_bytes([90; 32]);
+        let mut attestation = signer.sign_attestation_superseding(
+            claim.claim_id.clone(),
+            claim.claim_spec_digest()?,
+            ClaimTruth::True,
+            ResolutionFinality::Provisional,
+            Sha256Digest::from_bytes([91; 32]),
+            Sha256Digest::from_bytes([92; 32]),
+            vec![Sha256Digest::from_bytes([93; 32])],
+            None,
+            timestamp("2026-07-10T12:00:00Z")?,
+            timestamp("2026-07-10T12:20:00Z")?,
+            timestamp("2026-07-10T12:10:00Z")?,
+            2,
+            Some(predecessor),
+        )?;
+        verify_quorum(std::slice::from_ref(&attestation), &registry, 1)?;
+        attestation.supersedes_non_settling_record = Some(Sha256Digest::from_bytes([94; 32]));
+        assert!(matches!(
+            verify_quorum(&[attestation], &registry, 1),
+            Err(EvidenceError::InvalidSignature)
         ));
         Ok(())
     }

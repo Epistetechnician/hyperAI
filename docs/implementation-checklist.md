@@ -23,8 +23,12 @@ architecture therefore follows the prompt's Rust greenfield branch.
 - [x] Phase 4: portable evidence, runtime Ed25519 signatures, distinct quorum,
   existential resolution, disputes, pauses/finality guards, and composed local
   TRUE/FALSE/ERROR scenarios. The invalid-then-valid existential path is also
-  composed through evidence, finality, one idempotent mock effect, and reconciliation;
-  remaining scenario-level gaps are tracked in `docs/outcomes/acceptance.md`.
+  composed through evidence, finality, one idempotent mock effect, and
+  reconciliation. Counterexample correction now composes provisional FALSE,
+  settlement refusal, immutable dispute and decision records, recomputation,
+  superseding quorum, FINAL TRUE, an explicit supersession edge, and one
+  confirmed mock effect. Remaining scenario-level gaps are tracked in
+  `docs/outcomes/acceptance.md`.
 - [x] Phase 5 local surface: machine-readable CLI, public/operator API auth,
   OpenAPI route contract, payload limit, granular mock settlement preflight and
   workflow, artifact-driven settlement CLI, fixed-cardinality operational

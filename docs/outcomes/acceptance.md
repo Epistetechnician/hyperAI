@@ -19,9 +19,12 @@ the relevant invariants have focused tests but are not yet one composed path.
    effect; live Docker timeout/output-flood classification is runner-level only.
 6. Nondeterministic validator — `CONTRACT_TESTED`. Divergent replay contracts
    block resolution; composed evidence and settlement refusal remain open.
-7. Dispute with counterexample — `PARTIAL_CONTRACT`. Counterexample disputes
-   block finalization, but pre-cutoff candidate ingestion, recomputation, and
-   superseding resolution are not implemented as one path.
+7. Dispute with counterexample — `COMPOSED_TESTED`. A provisional FALSE is
+   refused by settlement preflight and blocked from finalization by an immutable
+   counterexample dispute. A candidate observed and received before cutoff then
+   produces two PASS replays, an accepted terminal decision, superseding quorum,
+   FINAL TRUE, one idempotent mock effect, and confirmed reconciliation. The
+   original record and both evidence views remain append-only artifacts.
 8. Tampered evidence — `CONTRACT_TESTED`. Standalone verification identifies
    digest failure; exported-file mutation through the CLI remains open.
 9. Stale market binding — `CONTRACT_TESTED`. Metadata drift fails preflight
@@ -42,7 +45,8 @@ the relevant invariants have focused tests but are not yet one composed path.
 16. Rights and capability gating — `CONTRACT_TESTED`. Missing item permission
     remains catalog/evaluation-only and cannot reach settlement readiness.
 
-The highest-impact remaining functional gap is scenario 7 because the domain
-does not yet provide terminal dispute decision, recomputation, and supersession
-as one append-only workflow. The highest-impact API security gap is scenario 12
-because authorization denial is not yet connected to durable audit persistence.
+The highest-impact remaining composed functional gaps are scenarios 4 and 6:
+incomplete observation and divergent replay already fail closed in focused
+contracts, but their evidence-to-settlement refusal paths are not yet composed.
+The highest-impact API security gap is scenario 12 because authorization denial
+is not yet connected to durable audit persistence.
