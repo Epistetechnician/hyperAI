@@ -42,8 +42,12 @@ the relevant invariants have focused tests but are not yet one composed path.
     and reaches complete durable state with one submission and one effect.
 11. Wrong network/mainnet mutation — `CONTRACT_TESTED`. Backend, API, and CLI
     reject mainnet mutation before signer or network processing.
-12. Unauthorized operation — `PARTIAL_CONTRACT`. Role-gated operations deny
-    public readers without response leakage; durable denial audit is open.
+12. Unauthorized operation — `COMPOSED_TESTED`. All five protected local API
+    routes deny public readers with the same fixed response before parsing or
+    effects, append sanitized immutable denial records using only
+    `AccessControlV1` and `OperationsV1`, and remain denied if audit persistence
+    fails. File-backed SQLite reopen and read-only verification prove exact
+    durable records and zero protected effects.
 13. Backward compatibility — `TESTED` by the workspace contract and full gates.
 14. NYU agent-to-verifier path — `CONTRACT_TESTED` with pinned recorded harness
     data; no hosted or authenticated interaction occurs.
@@ -53,7 +57,7 @@ the relevant invariants have focused tests but are not yet one composed path.
 16. Rights and capability gating — `CONTRACT_TESTED`. Missing item permission
     remains catalog/evaluation-only and cannot reach settlement readiness.
 
-The highest-impact remaining API security gap is scenario 12 because
-authorization denial is not yet connected to durable audit persistence. The
-next functional integration gaps are the live Docker classification portion of
-scenario 5 and composed stale-binding refusal in scenario 9.
+The highest-impact remaining integration gaps are the live Docker
+classification portion of scenario 5 and composed stale-binding refusal in
+scenario 9. The development role header and local SQLite audit sink do not
+establish production authentication, identity, or IAM.

@@ -3,11 +3,11 @@
 use std::{path::Path, str::FromStr, time::Duration};
 
 use outcomes_domain::{
-    CanonicalizationError, ClaimSpecError, ClaimSpecV1, DisputeDecisionKind,
-    DisputeDecisionRecordV1, DisputeRecordV1, MarketBindingV1, MutationContext,
-    OutcomeEvidenceBundleV1, ReconciliationResultV1, ReconciliationStatus, ResolutionRecordV1,
-    ResolutionSupersessionRecordV1, SettlementLifecycle, Sha256Digest, StateSlice,
-    SubmissionReceiptV1, UndeclaredMutation, UnsignedSettlementIntentV1, UtcTimestamp,
+    AuthorizationDenialError, AuthorizationDenialRecordV1, CanonicalizationError, ClaimSpecError,
+    ClaimSpecV1, DisputeDecisionKind, DisputeDecisionRecordV1, DisputeRecordV1, MarketBindingV1,
+    MutationContext, OutcomeEvidenceBundleV1, ReconciliationResultV1, ReconciliationStatus,
+    ResolutionRecordV1, ResolutionSupersessionRecordV1, SettlementLifecycle, Sha256Digest,
+    StateSlice, SubmissionReceiptV1, UndeclaredMutation, UnsignedSettlementIntentV1, UtcTimestamp,
     canonical_json, domain_separated_digest, submission_receipt_digest,
 };
 use serde::Serialize;
@@ -83,6 +83,17 @@ pub struct SettlementRecoveryIntegrityV1 {
     pub latest_reconciliation_digest: Option<Sha256Digest>,
 }
 
+/// Read-only durable identity and cardinality for one authorization denial.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthorizationDenialIntegrityV1 {
+    /// Decoded and identity-verified denial record.
+    pub record: AuthorizationDenialRecordV1,
+    /// Rows matching the deterministic denial identity.
+    pub row_count: u64,
+    /// Durable audit envelope digest.
+    pub audit_digest: Sha256Digest,
+}
+
 /// Durable append-only dispute state loaded after process restart.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DisputeRecoveryState {
@@ -114,6 +125,9 @@ pub enum PersistenceError {
     /// Mutation attempted a state slice it did not declare.
     #[error(transparent)]
     UndeclaredMutation(#[from] UndeclaredMutation),
+    /// Authorization-denial record identity is invalid.
+    #[error("invalid authorization denial: {0}")]
+    AuthorizationDenial(#[from] AuthorizationDenialError),
     /// One idempotency key was reused for different request semantics.
     #[error("idempotency key {key} was already used for a different request")]
     IdempotencyConflict {
@@ -163,6 +177,9 @@ pub enum PersistenceError {
     /// Settlement prerequisites do not form one exact claim/evidence/resolution/binding chain.
     #[error("settlement prerequisite identity conflict: {0}")]
     SettlementPrerequisiteConflict(&'static str),
+    /// Authorization-denial identity was reused for different semantics.
+    #[error("authorization denial identity conflict for {0}")]
+    AuthorizationDenialConflict(String),
 }
 
 /// `SQLite` development implementation of immutable claim persistence.
@@ -376,6 +393,134 @@ impl SqliteStore {
             Ok(claim)
         })
         .transpose()
+    }
+
+    /// Append one sanitized authorization denial without an outbox event.
+    ///
+    /// The mutation scope must contain exactly `AccessControlV1` and `OperationsV1`.
+    /// Exact replay is idempotent; identity reuse with different semantics fails closed.
+    ///
+    /// # Errors
+    ///
+    /// Returns a scope, identity, serialization, or database error.
+    pub async fn append_authorization_denial(
+        &self,
+        context: &MutationContext,
+        denial: &AuthorizationDenialRecordV1,
+    ) -> Result<AppendOutcome, PersistenceError> {
+        require_authorization_denial_scope(context)?;
+        denial.verify_identity()?;
+        if context.actor_id != denial.actor_id || context.request_id != denial.request_id {
+            return Err(PersistenceError::AuthorizationDenialConflict(
+                denial.denial_id.clone(),
+            ));
+        }
+        let payload_json = serde_json::to_string(denial)?;
+        let audit_digest = domain_separated_digest(
+            "hsai.authorization-denial-audit.v1",
+            &(
+                &context.actor_id,
+                &context.request_id,
+                &context.scope,
+                denial.record_digest,
+            ),
+        )?;
+        let mut transaction = self.pool.begin().await?;
+        let inserted = sqlx::query(
+            "INSERT OR IGNORE INTO audit_events(audit_id, event_type, actor_id, request_id, declared_state_slices_json, aggregate_type, aggregate_id, payload_digest, payload_json, received_at, audit_digest) VALUES(?, 'AUTHORIZATION_DENIED', ?, ?, ?, 'AUTHORIZATION', ?, ?, ?, ?, ?)",
+        )
+        .bind(&denial.denial_id)
+        .bind(&denial.actor_id)
+        .bind(&denial.request_id)
+        .bind(serde_json::to_string(&context.scope)?)
+        .bind(&denial.denial_id)
+        .bind(denial.record_digest.to_string())
+        .bind(&payload_json)
+        .bind(denial.denied_at.to_string())
+        .bind(audit_digest.to_string())
+        .execute(&mut *transaction)
+        .await?
+        .rows_affected() == 1;
+        if inserted {
+            transaction.commit().await?;
+            return Ok(AppendOutcome::Inserted);
+        }
+        let existing = sqlx::query(
+            "SELECT actor_id, request_id, declared_state_slices_json, aggregate_id, payload_digest, payload_json, audit_digest FROM audit_events WHERE audit_id = ? OR audit_digest = ? LIMIT 1",
+        )
+        .bind(&denial.denial_id)
+        .bind(audit_digest.to_string())
+        .fetch_optional(&mut *transaction)
+        .await?;
+        let exact = existing.is_some_and(|row| {
+            row.try_get::<String, _>("actor_id").ok().as_deref() == Some(&denial.actor_id)
+                && row.try_get::<String, _>("request_id").ok().as_deref()
+                    == Some(&denial.request_id)
+                && row
+                    .try_get::<String, _>("declared_state_slices_json")
+                    .ok()
+                    .as_deref()
+                    == serde_json::to_string(&context.scope).ok().as_deref()
+                && row.try_get::<String, _>("aggregate_id").ok().as_deref()
+                    == Some(&denial.denial_id)
+                && row.try_get::<String, _>("payload_digest").ok().as_deref()
+                    == Some(&denial.record_digest.to_string())
+                && row.try_get::<String, _>("payload_json").ok().as_deref() == Some(&payload_json)
+                && row.try_get::<String, _>("audit_digest").ok().as_deref()
+                    == Some(&audit_digest.to_string())
+        });
+        if exact {
+            transaction.commit().await?;
+            Ok(AppendOutcome::ExistingIdentical)
+        } else {
+            Err(PersistenceError::AuthorizationDenialConflict(
+                denial.denial_id.clone(),
+            ))
+        }
+    }
+
+    /// Read and verify one durable authorization denial.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stored-data identity, serialization, or database error.
+    pub async fn authorization_denial_integrity(
+        &self,
+        denial_id: &str,
+    ) -> Result<Option<AuthorizationDenialIntegrityV1>, PersistenceError> {
+        let rows = sqlx::query("SELECT payload_json, audit_digest FROM audit_events WHERE aggregate_type = 'AUTHORIZATION' AND aggregate_id = ?")
+            .bind(denial_id)
+            .fetch_all(&self.pool)
+            .await?;
+        let Some(row) = rows.first() else {
+            return Ok(None);
+        };
+        let payload: String = row.try_get("payload_json")?;
+        let record: AuthorizationDenialRecordV1 = serde_json::from_str(&payload)?;
+        record.verify_identity()?;
+        let audit_digest_text: String = row.try_get("audit_digest")?;
+        let audit_digest = serde_json::from_value(serde_json::Value::String(audit_digest_text))?;
+        Ok(Some(AuthorizationDenialIntegrityV1 {
+            record,
+            row_count: u64::try_from(rows.len())
+                .map_err(|_| PersistenceError::AuthorizationDenialConflict(denial_id.to_owned()))?,
+            audit_digest,
+        }))
+    }
+
+    /// Count all durable authorization-denial rows.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database or invalid-count error.
+    pub async fn authorization_denial_count(&self) -> Result<u64, PersistenceError> {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM audit_events WHERE aggregate_type = 'AUTHORIZATION'",
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        u64::try_from(count)
+            .map_err(|_| PersistenceError::AuthorizationDenialConflict("negative-count".to_owned()))
     }
 
     /// Atomically persist the exact evidence, final resolution, and market binding needed by settlement.
@@ -1269,6 +1414,17 @@ fn require_freeze_scope(context: &MutationContext) -> Result<(), PersistenceErro
     Ok(())
 }
 
+fn require_authorization_denial_scope(context: &MutationContext) -> Result<(), PersistenceError> {
+    context.scope.require(StateSlice::AccessControlV1)?;
+    context.scope.require(StateSlice::OperationsV1)?;
+    if context.scope.iter().count() != 2 {
+        return Err(PersistenceError::AuthorizationDenialConflict(
+            "unexpected-state-slice".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 fn require_settlement_scope(context: &MutationContext) -> Result<(), PersistenceError> {
     for slice in [
         StateSlice::SettlementLedgerV1,
@@ -1851,8 +2007,9 @@ fn prefixed_id(prefix: &str, digest: Sha256Digest) -> String {
 mod tests {
     use hyperliquid_hip4::Hip4MockBackend;
     use outcomes_domain::{
-        ClaimTruth, ExternalSideV1, MarketBindingV1, MutationScope, ResolutionFinality,
-        SettlementNetwork, fixtures::local_demo_claim_draft,
+        AuthorizationActionV1, AuthorizationActorClassV1, AuthorizationDenialReasonV1, ClaimTruth,
+        ExternalSideV1, MarketBindingV1, MutationScope, ResolutionFinality, SettlementNetwork,
+        fixtures::local_demo_claim_draft,
     };
 
     use super::*;
@@ -1897,6 +2054,25 @@ mod tests {
                 StateSlice::DeliveryV1,
             ]),
         }
+    }
+
+    fn denial_context(request_id: &str) -> MutationContext {
+        MutationContext {
+            actor_id: "public-reader".to_owned(),
+            request_id: request_id.to_owned(),
+            scope: MutationScope::new([StateSlice::AccessControlV1, StateSlice::OperationsV1]),
+        }
+    }
+
+    fn denial(request_id: &str) -> Result<AuthorizationDenialRecordV1, Box<dyn std::error::Error>> {
+        Ok(AuthorizationDenialRecordV1::new(
+            request_id.to_owned(),
+            "public-reader".to_owned(),
+            AuthorizationActorClassV1::Anonymous,
+            AuthorizationActionV1::DependencyHealthRead,
+            AuthorizationDenialReasonV1::MissingRole,
+            timestamp("2026-07-12T12:00:00Z")?,
+        )?)
     }
 
     #[allow(clippy::too_many_lines)]
@@ -3017,6 +3193,130 @@ mod tests {
         readonly.close().await;
         assert!(!path.with_extension("sqlite-wal").exists());
         assert!(!path.with_extension("sqlite-shm").exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn authorization_denial_is_scoped_sanitized_idempotent_and_durable()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("denials.sqlite");
+        let store = SqliteStore::connect_path(&path, 4).await?;
+        store.migrate().await?;
+        let record = denial("request-denial-1")?;
+        let missing_scope = MutationContext {
+            actor_id: "public-reader".to_owned(),
+            request_id: record.request_id.clone(),
+            scope: MutationScope::new([StateSlice::AccessControlV1]),
+        };
+        assert!(matches!(
+            store
+                .append_authorization_denial(&missing_scope, &record)
+                .await,
+            Err(PersistenceError::UndeclaredMutation(_))
+        ));
+        let extra_scope = MutationContext {
+            actor_id: "public-reader".to_owned(),
+            request_id: record.request_id.clone(),
+            scope: MutationScope::new([
+                StateSlice::AccessControlV1,
+                StateSlice::OperationsV1,
+                StateSlice::DeliveryV1,
+            ]),
+        };
+        assert!(matches!(
+            store
+                .append_authorization_denial(&extra_scope, &record)
+                .await,
+            Err(PersistenceError::AuthorizationDenialConflict(_))
+        ));
+        assert_eq!(
+            store
+                .append_authorization_denial(&denial_context(&record.request_id), &record)
+                .await?,
+            AppendOutcome::Inserted
+        );
+        assert_eq!(
+            store
+                .append_authorization_denial(&denial_context(&record.request_id), &record)
+                .await?,
+            AppendOutcome::ExistingIdentical
+        );
+        assert_eq!(store.authorization_denial_count().await?, 1);
+        let integrity = store
+            .authorization_denial_integrity(&record.denial_id)
+            .await?
+            .ok_or("missing denial")?;
+        assert_eq!(integrity.record, record);
+        assert_eq!(integrity.row_count, 1);
+        let payload = serde_json::to_string(&integrity.record)?;
+        for forbidden in ["x-hsai-role", "credential", "password", "127.0.0.1"] {
+            assert!(!payload.contains(forbidden));
+        }
+        let update = sqlx::query("UPDATE audit_events SET actor_id = 'changed' WHERE audit_id = ?")
+            .bind(&record.denial_id)
+            .execute(&store.pool)
+            .await;
+        assert!(update.is_err());
+        store.checkpoint_and_close().await?;
+        let reopened = SqliteStore::connect_read_only(&path).await?;
+        assert_eq!(reopened.authorization_denial_count().await?, 1);
+        assert_eq!(
+            reopened
+                .authorization_denial_integrity(&record.denial_id)
+                .await?
+                .ok_or("missing reopened denial")?
+                .record,
+            record
+        );
+        reopened.close().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn authorization_denial_conflict_and_concurrency_fail_closed()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let store = SqliteStore::in_memory().await?;
+        store.migrate().await?;
+        let record = denial("request-denial-concurrent")?;
+        let mut conflicting = record.clone();
+        conflicting.reason = AuthorizationDenialReasonV1::RoleMismatch;
+        conflicting.record_digest = AuthorizationDenialRecordV1::new(
+            conflicting.request_id.clone(),
+            conflicting.actor_id.clone(),
+            conflicting.actor_class,
+            conflicting.action,
+            conflicting.reason,
+            conflicting.denied_at.clone(),
+        )?
+        .record_digest;
+        let left_store = store.clone();
+        let left_record = record.clone();
+        let left = tokio::spawn(async move {
+            left_store
+                .append_authorization_denial(&denial_context(&left_record.request_id), &left_record)
+                .await
+        });
+        let right_store = store.clone();
+        let right_record = record.clone();
+        let right = tokio::spawn(async move {
+            right_store
+                .append_authorization_denial(
+                    &denial_context(&right_record.request_id),
+                    &right_record,
+                )
+                .await
+        });
+        let outcomes = [left.await??, right.await??];
+        assert!(outcomes.contains(&AppendOutcome::Inserted));
+        assert!(outcomes.contains(&AppendOutcome::ExistingIdentical));
+        assert!(matches!(
+            store
+                .append_authorization_denial(&denial_context(&conflicting.request_id), &conflicting)
+                .await,
+            Err(PersistenceError::AuthorizationDenialConflict(_))
+        ));
+        assert_eq!(store.authorization_denial_count().await?, 1);
         Ok(())
     }
 

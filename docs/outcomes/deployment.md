@@ -5,12 +5,15 @@ migrations and a filesystem content-addressed store. It is not a production
 deployment claim.
 
 The controlled local beta is governed by the immutable mock-only profile in
-`config/local-beta-profile-v2.json` and the two-person operating procedure in
+`config/local-beta-profile-v3.json` and the two-person operating procedure in
 `docs/outcomes/local-beta-runbook.md`. It permits only serial, trusted-operator,
 single-host runs of the seven recorded scenarios plus the file-backed SQLite
 lost-receipt recovery check. That check covers an application restart with a
 retained mock authority; it does not establish backend-process or host-crash
-durability. The beta does not authorize live writes, hosted users, arbitrary
+durability. The beta also records and read-only verifies sanitized durable
+denial audits for all protected local API routes, but the development role
+header is not production authentication or IAM. The beta does not authorize
+live writes, hosted users, arbitrary
 unreviewed validators, testnet, or mainnet.
 
 Production topology requires the API and worker as separate non-root services,
@@ -29,6 +32,9 @@ The implemented API evaluates cached fixed-schema dependency state on each
 request. Its default composition is unconfigured and returns not-ready. A
 deployment must inject non-blocking snapshot and clock providers; real database,
 object-store, signer, and source probes run outside request handlers.
+Protected deployments must also inject a durable authorization-denial audit
+sink. Compatibility constructors use a non-durable sink and do not establish
+the composed beta audit guarantee.
 
 `.env.example` contains placeholders only. Private keys must never be passed on
 the CLI, stored in environment files, or logged. Mainnet write configuration has

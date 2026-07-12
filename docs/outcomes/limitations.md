@@ -4,13 +4,21 @@ Implemented and tested locally does not mean production-ready.
 
 - The controlled local beta profile is an immutable-config operating boundary,
   not a hosted runtime deployment mechanism. The CLI loads and enforces its
-  exact mock-only, serial seven-scenario plus SQLite-recovery contract, binds
+  exact mock-only, serial seven-scenario plus SQLite-recovery and durable-denial
+  contract, binds
   the copied profile into each run manifest, requires bounded clean-source/tool
   provenance, auto-seals an exact-file inventory, and refuses stale
   run-directory reuse. The seal
   detects retained-byte drift but is not a signature, content-safety scan,
   adversarial filesystem snapshot, or trusted-build attestation. Operator and
   independent-reviewer signoff remain required.
+
+- The composed denial check covers the development role-header boundary and a
+  file-backed SQLite audit sink. Records are sanitized and append-only, but the
+  role header is not authenticated identity, the audit rows are not a verified
+  hash chain, and compatibility API constructors remain non-durable. Production
+  authentication, session security, identity lifecycle, IAM, and centralized
+  audit retention remain deployment work.
 
 - The local Docker candidate verifier is tested with a preloaded digest-pinned
   Alpine image for controls, exact inputs, PASS/FAIL, timeout, output flood,

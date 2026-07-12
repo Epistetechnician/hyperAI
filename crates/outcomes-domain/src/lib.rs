@@ -3,6 +3,7 @@
 //! This crate is intentionally free of HTTP, database, object-store, cloud,
 //! container-runtime, Hyperliquid SDK, and challenge-specific dependencies.
 
+mod authorization;
 mod canonical;
 mod identifiers;
 mod model;
@@ -15,6 +16,7 @@ mod timestamp;
 #[cfg(any(test, feature = "fixtures"))]
 pub mod fixtures;
 
+pub use authorization::*;
 pub use canonical::{CanonicalizationError, canonical_json, domain_separated_digest};
 pub use identifiers::{ClaimId, Sha256Digest};
 pub use model::*;

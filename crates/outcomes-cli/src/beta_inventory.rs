@@ -200,6 +200,7 @@ fn validate_run_prerequisites(
     let profile_domain = match profile.get("schema_version").and_then(Value::as_str) {
         Some("hsai.local-beta-profile.v1") => "hsai.local-beta-profile.v1",
         Some("hsai.local-beta-profile.v2") => "hsai.local-beta-profile.v2",
+        Some("hsai.local-beta-profile.v3") => "hsai.local-beta-profile.v3",
         _ => {
             return Err(InventoryError::new(
                 "BETA_PROFILE_INVALID",

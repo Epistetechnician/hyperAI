@@ -12,6 +12,10 @@ use std::{
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use hyperliquid_hip4::{Hip4ReadOnlyBackend, decode_asset_id, encode_asset_ids};
+use outcomes_api::{
+    LocalAuthorizationDenialReportV1, run_local_authorization_denial_acceptance,
+    verify_local_authorization_denial_acceptance,
+};
 use outcomes_application::{
     LocalRecoveryReportV1, LocalScenario, ScenarioReport, run_local_lost_receipt_recovery,
     run_local_scenario, verify_local_lost_receipt_recovery,
@@ -44,7 +48,8 @@ use beta_provenance::{
 const CAPABILITIES: &str = include_str!("../../../config/adapter-capabilities.json");
 const CORPUS_PROFILES: &str = include_str!("../../../config/corpus-profiles.json");
 const LEGACY_LOCAL_BETA_PROFILE: &str = include_str!("../../../config/local-beta-profile.json");
-const LOCAL_BETA_PROFILE: &str = include_str!("../../../config/local-beta-profile-v2.json");
+const LOCAL_BETA_PROFILE_V2: &str = include_str!("../../../config/local-beta-profile-v2.json");
+const LOCAL_BETA_PROFILE: &str = include_str!("../../../config/local-beta-profile-v3.json");
 const BETA_SCENARIOS: [(&str, LocalScenario); 7] = [
     ("true", LocalScenario::True),
     ("false", LocalScenario::False),
@@ -168,6 +173,8 @@ struct BetaRunManifestV3 {
     tamper_check: BetaTamperCheck,
     external_effect: String,
 }
+
+type BetaRunManifestV4 = BetaRunManifestV3;
 
 #[derive(Debug, Parser)]
 #[command(name = "hsai", version, about = "HSAI verifiable outcome protocol")]
@@ -486,9 +493,19 @@ fn embedded_legacy_beta_profile()
 fn embedded_beta_profile_v2()
 -> Result<(LocalBetaProfileV2, outcomes_domain::Sha256Digest), CliError> {
     let profile: LocalBetaProfileV2 =
-        serde_json::from_str(LOCAL_BETA_PROFILE).map_err(CliError::internal)?;
+        serde_json::from_str(LOCAL_BETA_PROFILE_V2).map_err(CliError::internal)?;
     validate_beta_profile_v2(&profile)?;
     let digest = domain_separated_digest("hsai.local-beta-profile.v2", &profile)
+        .map_err(CliError::internal)?;
+    Ok((profile, digest))
+}
+
+fn embedded_beta_profile_v3()
+-> Result<(LocalBetaProfileV2, outcomes_domain::Sha256Digest), CliError> {
+    let profile: LocalBetaProfileV2 =
+        serde_json::from_str(LOCAL_BETA_PROFILE).map_err(CliError::internal)?;
+    validate_beta_profile_v3(&profile)?;
+    let digest = domain_separated_digest("hsai.local-beta-profile.v3", &profile)
         .map_err(CliError::internal)?;
     Ok((profile, digest))
 }
@@ -566,7 +583,7 @@ fn run_beta_rehearsal_with_provider_and_seal(
     validate_run_id(run_id)?;
     let profile: LocalBetaProfileV2 =
         serde_json::from_str(LOCAL_BETA_PROFILE).map_err(CliError::internal)?;
-    validate_beta_profile_v2(&profile)?;
+    validate_beta_profile_v3(&profile)?;
     let provenance = provenance_provider
         .collect(Path::new("."))
         .map_err(|error| {
@@ -589,7 +606,7 @@ fn run_beta_rehearsal_with_provider_and_seal(
             CliError::input("BETA_RUN_CREATE_FAILED", &error.to_string())
         }
     })?;
-    let profile_digest = domain_separated_digest("hsai.local-beta-profile.v2", &profile)
+    let profile_digest = domain_separated_digest("hsai.local-beta-profile.v3", &profile)
         .map_err(CliError::internal)?;
     fs::write(run_root.join("local-beta-profile.json"), LOCAL_BETA_PROFILE)
         .map_err(|error| CliError::input("ARTIFACT_WRITE_FAILED", &error.to_string()))?;
@@ -654,7 +671,7 @@ fn run_beta_rehearsal_with_provider_and_seal(
         })?;
     let recovery_report_path = recovery_root.join("local-recovery-report.json");
     let recovery_database_path = recovery_root.join("settlement-recovery.sqlite3");
-    let operational_checks = vec![BetaOperationalCheckResult {
+    let mut operational_checks = vec![BetaOperationalCheckResult {
         check: "sqlite-settlement-recovery".to_owned(),
         status: "PASS".to_owned(),
         report_file: "operational-checks/sqlite-settlement-recovery/local-recovery-report.json"
@@ -673,9 +690,38 @@ fn run_beta_rehearsal_with_provider_and_seal(
             CliError::operation("BETA_OPERATIONAL_CHECK_FAILED", &error.to_string())
         })?;
 
+    let authorization_root = run_root.join("operational-checks/authorization-denial");
+    let authorization_report = beta_runtime()?
+        .block_on(run_local_authorization_denial_acceptance(
+            &authorization_root,
+        ))
+        .map_err(|error| {
+            CliError::operation("BETA_OPERATIONAL_CHECK_FAILED", &error.to_string())
+        })?;
+    let authorization_report_path = authorization_root.join("authorization-denial-report.json");
+    let authorization_database_path = authorization_root.join("authorization-denial.sqlite3");
+    operational_checks.push(BetaOperationalCheckResult {
+        check: "authorization-denial".to_owned(),
+        status: "PASS".to_owned(),
+        report_file: "operational-checks/authorization-denial/authorization-denial-report.json"
+            .to_owned(),
+        report_digest: raw_file_digest(&authorization_report_path)?,
+        database_file: "operational-checks/authorization-denial/authorization-denial.sqlite3"
+            .to_owned(),
+        database_digest: raw_file_digest(&authorization_database_path)?,
+    });
+    beta_runtime()?
+        .block_on(verify_local_authorization_denial_acceptance(
+            &authorization_root,
+            &authorization_report,
+        ))
+        .map_err(|error| {
+            CliError::operation("BETA_OPERATIONAL_CHECK_FAILED", &error.to_string())
+        })?;
+
     run_exported_tamper_check(&run_root)?;
     let manifest = json!({
-        "schema_version": "hsai.local-beta-run-manifest.v3",
+        "schema_version": "hsai.local-beta-run-manifest.v4",
         "profile_schema_version": profile.schema_version,
         "profile_id": profile.profile_id,
         "profile_file": "local-beta-profile.json",
@@ -757,6 +803,30 @@ fn validate_beta_profile_v2(profile: &LocalBetaProfileV2) -> Result<(), CliError
         || profile.serial_concurrency != 1
         || profile.scenarios != expected
         || profile.operational_checks != ["sqlite-settlement-recovery"]
+        || profile.artifact_classification != "PUBLIC"
+        || !profile.stop_on_failure
+    {
+        return Err(CliError::operation(
+            "UNSAFE_LOCAL_BETA_PROFILE",
+            "local beta profile violates the frozen mock-only serial rehearsal contract",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_beta_profile_v3(profile: &LocalBetaProfileV2) -> Result<(), CliError> {
+    let expected = BETA_SCENARIOS
+        .iter()
+        .map(|(name, _)| (*name).to_owned())
+        .collect::<Vec<_>>();
+    if profile.schema_version != "hsai.local-beta-profile.v3"
+        || profile.profile_id != "hermetic-trusted-operator-v3"
+        || profile.network != "MOCK"
+        || profile.backend != "mock-hip4"
+        || profile.live_writes
+        || profile.serial_concurrency != 1
+        || profile.scenarios != expected
+        || profile.operational_checks != ["sqlite-settlement-recovery", "authorization-denial"]
         || profile.artifact_classification != "PUBLIC"
         || !profile.stop_on_failure
     {
@@ -877,9 +947,14 @@ fn verify_beta_run_semantics(
             verify_beta_run_semantics_v3(run_root, run_id, &profile)?;
             Ok(digest)
         }
+        Some("hsai.local-beta-run-manifest.v4") => {
+            let (profile, digest) = embedded_beta_profile_v3()?;
+            verify_beta_run_semantics_v4(run_root, run_id, &profile)?;
+            Ok(digest)
+        }
         _ => Err(CliError::operation(
             "BETA_MANIFEST_UNSUPPORTED_SCHEMA",
-            "sealed beta verification requires run manifest v2 or v3",
+            "sealed beta verification requires run manifest v2, v3, or v4",
         )),
     }
 }
@@ -1129,6 +1204,134 @@ fn verify_beta_run_semantics_v3(
             CliError::operation("BETA_OPERATIONAL_CHECK_FAILED", &error.to_string())
         })?;
     verify_exported_tamper_artifact(run_root)
+}
+
+#[allow(clippy::too_many_lines)]
+fn verify_beta_run_semantics_v4(
+    run_root: &Path,
+    run_id: &str,
+    profile: &LocalBetaProfileV2,
+) -> Result<(), CliError> {
+    let manifest: BetaRunManifestV4 = read_json_path(&run_root.join("beta-run-manifest.json"))?;
+    let expected_profile_digest = domain_separated_digest("hsai.local-beta-profile.v3", profile)
+        .map_err(CliError::internal)?;
+    if manifest.schema_version != "hsai.local-beta-run-manifest.v4"
+        || manifest.run_id != run_id
+        || manifest.status != "PASS"
+        || manifest.profile_schema_version != profile.schema_version
+        || manifest.profile_id != profile.profile_id
+        || manifest.profile_file != "local-beta-profile.json"
+        || manifest.profile_digest != expected_profile_digest
+        || manifest.provenance_file != "run-provenance.json"
+        || manifest.claim_ceiling != profile.claim_ceiling
+        || manifest.artifact_classification != profile.artifact_classification
+        || manifest.external_effect != "mock only; no network writes"
+        || manifest.tamper_check.status != "PASS"
+        || manifest.tamper_check.expected_result != "VERIFICATION_REJECTED"
+    {
+        return Err(CliError::operation(
+            "BETA_MANIFEST_SEMANTICS_MISMATCH",
+            "beta manifest identity, profile, status, or claim boundary differs from the frozen contract",
+        ));
+    }
+    let copied_profile: LocalBetaProfileV2 =
+        read_json_path(&run_root.join("local-beta-profile.json"))?;
+    validate_beta_profile_v3(&copied_profile)?;
+    let copied_profile_digest =
+        domain_separated_digest("hsai.local-beta-profile.v3", &copied_profile)
+            .map_err(CliError::internal)?;
+    if copied_profile_digest != expected_profile_digest {
+        return Err(CliError::operation(
+            "BETA_PROFILE_DIGEST_MISMATCH",
+            "copied profile differs from the embedded frozen profile",
+        ));
+    }
+    let provenance: BetaRunProvenanceV1 = read_json_path(&run_root.join("run-provenance.json"))?;
+    validate_recorded_provenance(&provenance).map_err(|error| {
+        CliError::operation(error.code, "recorded beta provenance validation failed")
+    })?;
+    let provenance_digest =
+        domain_separated_digest("hsai.local-beta-run-provenance.v1", &provenance)
+            .map_err(CliError::internal)?;
+    if provenance_digest != manifest.provenance_digest {
+        return Err(CliError::operation(
+            "BETA_PROVENANCE_DIGEST_MISMATCH",
+            "run provenance digest differs from the manifest binding",
+        ));
+    }
+    verify_beta_scenario_results(run_root, &manifest.scenario_results)?;
+    let [recovery_check, authorization_check] = manifest.operational_checks.as_slice() else {
+        return Err(CliError::operation(
+            "BETA_OPERATIONAL_CHECK_MISMATCH",
+            "beta manifest must contain exactly the two frozen operational checks",
+        ));
+    };
+    verify_operational_check_binding(
+        run_root,
+        recovery_check,
+        "sqlite-settlement-recovery",
+        "operational-checks/sqlite-settlement-recovery/local-recovery-report.json",
+        "operational-checks/sqlite-settlement-recovery/settlement-recovery.sqlite3",
+    )?;
+    let recovery_root = run_root.join("operational-checks/sqlite-settlement-recovery");
+    let recovery_report: LocalRecoveryReportV1 =
+        read_json_path(&recovery_root.join("local-recovery-report.json"))?;
+    beta_runtime()?
+        .block_on(verify_local_lost_receipt_recovery(
+            &recovery_root,
+            &recovery_report,
+        ))
+        .map_err(|error| {
+            CliError::operation("BETA_OPERATIONAL_CHECK_FAILED", &error.to_string())
+        })?;
+
+    verify_operational_check_binding(
+        run_root,
+        authorization_check,
+        "authorization-denial",
+        "operational-checks/authorization-denial/authorization-denial-report.json",
+        "operational-checks/authorization-denial/authorization-denial.sqlite3",
+    )?;
+    let authorization_root = run_root.join("operational-checks/authorization-denial");
+    let authorization_report: LocalAuthorizationDenialReportV1 =
+        read_json_path(&authorization_root.join("authorization-denial-report.json"))?;
+    beta_runtime()?
+        .block_on(verify_local_authorization_denial_acceptance(
+            &authorization_root,
+            &authorization_report,
+        ))
+        .map_err(|error| {
+            CliError::operation("BETA_OPERATIONAL_CHECK_FAILED", &error.to_string())
+        })?;
+    verify_exported_tamper_artifact(run_root)
+}
+
+fn verify_operational_check_binding(
+    run_root: &Path,
+    check: &BetaOperationalCheckResult,
+    expected_check: &str,
+    expected_report_file: &str,
+    expected_database_file: &str,
+) -> Result<(), CliError> {
+    if check.check != expected_check
+        || check.status != "PASS"
+        || check.report_file != expected_report_file
+        || check.database_file != expected_database_file
+    {
+        return Err(CliError::operation(
+            "BETA_OPERATIONAL_CHECK_MISMATCH",
+            "operational check identity, status, or artifact path differs from the frozen contract",
+        ));
+    }
+    if raw_file_digest(&run_root.join(&check.report_file))? != check.report_digest
+        || raw_file_digest(&run_root.join(&check.database_file))? != check.database_digest
+    {
+        return Err(CliError::operation(
+            "BETA_OPERATIONAL_CHECK_MISMATCH",
+            "operational check artifact digest differs from the manifest binding",
+        ));
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_lines)]
@@ -1916,24 +2119,33 @@ mod tests {
             read_json_path(&run_root.join("local-beta-profile.json"))
                 .map_err(|error| std::io::Error::other(error.message))?;
         let copied_profile_digest =
-            domain_separated_digest("hsai.local-beta-profile.v2", &copied_profile)?;
+            domain_separated_digest("hsai.local-beta-profile.v3", &copied_profile)?;
         assert_eq!(
             output["profile_digest"],
             serde_json::to_value(copied_profile_digest)?
         );
         assert_eq!(output["profile_file"], "local-beta-profile.json");
-        assert_eq!(output["schema_version"], "hsai.local-beta-run-manifest.v3");
+        assert_eq!(output["schema_version"], "hsai.local-beta-run-manifest.v4");
         assert_eq!(
             output["operational_checks"].as_array().map(Vec::len),
-            Some(1)
+            Some(2)
         );
         assert_eq!(
             output["operational_checks"][0]["check"],
             "sqlite-settlement-recovery"
         );
+        assert_eq!(
+            output["operational_checks"][1]["check"],
+            "authorization-denial"
+        );
         assert!(
             run_root
                 .join("operational-checks/sqlite-settlement-recovery/settlement-recovery.sqlite3")
+                .is_file()
+        );
+        assert!(
+            run_root
+                .join("operational-checks/authorization-denial/authorization-denial.sqlite3")
                 .is_file()
         );
         assert_eq!(output["provenance_file"], "run-provenance.json");
@@ -2084,7 +2296,7 @@ mod tests {
     }
 
     #[test]
-    fn contract_beta_recovery_report_and_database_tamper_fail_closed()
+    fn contract_beta_operational_report_and_database_tamper_fail_closed()
     -> Result<(), Box<dyn std::error::Error>> {
         for (run_id, relative_path) in [
             (
@@ -2095,6 +2307,14 @@ mod tests {
                 "recovery-database-tamper",
                 "operational-checks/sqlite-settlement-recovery/settlement-recovery.sqlite3",
             ),
+            (
+                "authorization-report-tamper",
+                "operational-checks/authorization-denial/authorization-denial-report.json",
+            ),
+            (
+                "authorization-database-tamper",
+                "operational-checks/authorization-denial/authorization-denial.sqlite3",
+            ),
         ] {
             let directory = tempfile::tempdir()?;
             beta_rehearsal(directory.path(), run_id)
@@ -2104,6 +2324,47 @@ mod tests {
             bytes.push(b'!');
             fs::write(path, bytes)?;
             assert!(verify_beta_run(directory.path(), run_id).is_err());
+        }
+
+        let directory = tempfile::tempdir()?;
+        beta_rehearsal(directory.path(), "authorization-report-delete")
+            .map_err(|error| std::io::Error::other(error.message))?;
+        fs::remove_file(
+            directory
+                .path()
+                .join("authorization-report-delete/operational-checks/authorization-denial/authorization-denial-report.json"),
+        )?;
+        assert!(verify_beta_run(directory.path(), "authorization-report-delete").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn contract_beta_v4_rejects_operational_check_order_removal_and_addition()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let run_id = "operational-matrix-drift";
+        beta_rehearsal_unsealed(directory.path(), run_id)
+            .map_err(|error| std::io::Error::other(error.message))?;
+        let manifest_path = directory.path().join(run_id).join("beta-run-manifest.json");
+        let original: Value = serde_json::from_slice(&fs::read(&manifest_path)?)?;
+        for mutation in ["order", "remove", "add"] {
+            let mut changed = original.clone();
+            let checks = changed["operational_checks"]
+                .as_array_mut()
+                .ok_or("operational checks missing")?;
+            match mutation {
+                "order" => checks.swap(0, 1),
+                "remove" => {
+                    checks.pop();
+                }
+                "add" => checks.push(checks[0].clone()),
+                _ => unreachable!(),
+            }
+            fs::write(&manifest_path, serde_json::to_vec_pretty(&changed)?)?;
+            assert!(
+                verify_beta_run_semantics(&directory.path().join(run_id), run_id).is_err(),
+                "{mutation} mutation must fail"
+            );
         }
         Ok(())
     }
@@ -2167,22 +2428,28 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let mut profile: LocalBetaProfileV2 = serde_json::from_str(LOCAL_BETA_PROFILE)?;
         profile.profile_id = "unapproved-local-profile".to_owned();
-        let identity_error = validate_beta_profile_v2(&profile)
+        let identity_error = validate_beta_profile_v3(&profile)
             .err()
             .ok_or("profile ID drift must fail")?;
         assert_eq!(identity_error.code, "UNSAFE_LOCAL_BETA_PROFILE");
-        profile.profile_id = "hermetic-trusted-operator-v2".to_owned();
+        profile.profile_id = "hermetic-trusted-operator-v3".to_owned();
         profile.live_writes = true;
-        let live_error = validate_beta_profile_v2(&profile)
+        let live_error = validate_beta_profile_v3(&profile)
             .err()
             .ok_or("live writes must fail")?;
         assert_eq!(live_error.code, "UNSAFE_LOCAL_BETA_PROFILE");
         profile.live_writes = false;
         profile.scenarios.swap(0, 1);
-        let drift_error = validate_beta_profile_v2(&profile)
+        let drift_error = validate_beta_profile_v3(&profile)
             .err()
             .ok_or("scenario drift must fail")?;
         assert_eq!(drift_error.code, "UNSAFE_LOCAL_BETA_PROFILE");
+        profile.scenarios.swap(0, 1);
+        profile.operational_checks.swap(0, 1);
+        let check_order_error = validate_beta_profile_v3(&profile)
+            .err()
+            .ok_or("operational check order drift must fail")?;
+        assert_eq!(check_order_error.code, "UNSAFE_LOCAL_BETA_PROFILE");
         Ok(())
     }
 }

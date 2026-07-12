@@ -8,25 +8,39 @@ pub use readiness::{
     ReadinessProviderError, ReadinessSnapshot, ReadinessSnapshotProvider, SystemReadinessClock,
 };
 
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    convert::Infallible,
+    fmt, fs,
+    path::{Path as FsPath, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
+use async_trait::async_trait;
 use axum::{
     Json, Router,
-    body::Bytes,
+    body::{Body, Bytes, to_bytes},
     extract::{DefaultBodyLimit, Path, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, Request, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
 use outcomes_application::{LocalScenario, ScenarioReport, run_local_scenario};
 use outcomes_domain::{
-    ClaimSpecV1, MarketBindingV1, ResolutionRecordV1, SettlementNetwork, Sha256Digest,
+    AuthorizationActionV1, AuthorizationActorClassV1, AuthorizationDenialReasonV1,
+    AuthorizationDenialRecordV1, ClaimSpecV1, MarketBindingV1, MutationContext, MutationScope,
+    ResolutionRecordV1, SettlementNetwork, Sha256Digest, StateSlice, UtcTimestamp,
     domain_separated_digest,
 };
+use outcomes_persistence_sqlx::{PersistenceError, SqliteStore};
 use outcomes_settlement::{CapabilityMatrix, SettlementPreflight, preflight};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::Digest as _;
 use thiserror::Error;
+use tower::ServiceExt as _;
 
 const CAPABILITIES: &str = include_str!("../../../config/adapter-capabilities.json");
 /// Checked-in `OpenAPI` 3.1 document validated against implemented routes.
@@ -47,6 +61,70 @@ struct AppState {
     config: Arc<ApiConfig>,
     capabilities: Value,
     readiness: ReadinessMonitor,
+    authorization_audit: Arc<dyn AuthorizationDenialAudit>,
+    request_namespace: String,
+    request_sequence: Arc<AtomicU64>,
+}
+
+/// Sanitized failure from the authorization-denial audit boundary.
+#[derive(Debug, Error)]
+#[error("authorization denial audit failed")]
+pub struct AuthorizationAuditError;
+
+/// Narrow asynchronous port for append-only authorization-denial auditing.
+#[async_trait]
+pub trait AuthorizationDenialAudit: fmt::Debug + Send + Sync {
+    /// Persist one already-sanitized denial before the fixed forbidden response.
+    async fn record_denial(
+        &self,
+        record: &AuthorizationDenialRecordV1,
+    ) -> Result<(), AuthorizationAuditError>;
+}
+
+#[derive(Debug, Default)]
+struct NonDurableAuthorizationDenialAudit;
+
+#[async_trait]
+impl AuthorizationDenialAudit for NonDurableAuthorizationDenialAudit {
+    async fn record_denial(
+        &self,
+        _record: &AuthorizationDenialRecordV1,
+    ) -> Result<(), AuthorizationAuditError> {
+        Ok(())
+    }
+}
+
+/// Durable `SQLite` implementation of the denial-audit port.
+#[derive(Debug, Clone)]
+pub struct SqliteAuthorizationDenialAudit {
+    store: SqliteStore,
+}
+
+impl SqliteAuthorizationDenialAudit {
+    /// Bind the authorization audit port to an initialized store.
+    #[must_use]
+    pub fn new(store: SqliteStore) -> Self {
+        Self { store }
+    }
+}
+
+#[async_trait]
+impl AuthorizationDenialAudit for SqliteAuthorizationDenialAudit {
+    async fn record_denial(
+        &self,
+        record: &AuthorizationDenialRecordV1,
+    ) -> Result<(), AuthorizationAuditError> {
+        let context = MutationContext {
+            actor_id: record.actor_id.clone(),
+            request_id: record.request_id.clone(),
+            scope: MutationScope::new([StateSlice::AccessControlV1, StateSlice::OperationsV1]),
+        };
+        self.store
+            .append_authorization_denial(&context, record)
+            .await
+            .map_err(|_| AuthorizationAuditError)?;
+        Ok(())
+    }
 }
 
 /// API construction failure.
@@ -79,10 +157,35 @@ pub fn router_with_readiness(
     config: ApiConfig,
     readiness: ReadinessMonitor,
 ) -> Result<Router, ApiBuildError> {
+    router_with_readiness_and_authorization_audit(
+        config,
+        readiness,
+        Arc::new(NonDurableAuthorizationDenialAudit),
+        "non-durable-api-v1".to_owned(),
+    )
+}
+
+/// Build the API with an explicitly injected authorization-denial audit boundary.
+///
+/// `request_namespace` is server-controlled and is hashed into bounded request
+/// identities; it is never retained directly in denial records.
+///
+/// # Errors
+///
+/// Returns an error if the checked-in capability record cannot be parsed.
+pub fn router_with_readiness_and_authorization_audit(
+    config: ApiConfig,
+    readiness: ReadinessMonitor,
+    authorization_audit: Arc<dyn AuthorizationDenialAudit>,
+    request_namespace: String,
+) -> Result<Router, ApiBuildError> {
     let state = AppState {
         config: Arc::new(config),
         capabilities: serde_json::from_str(CAPABILITIES)?,
         readiness,
+        authorization_audit,
+        request_namespace,
+        request_sequence: Arc::new(AtomicU64::new(0)),
     };
     Ok(Router::new()
         .route("/health/live", get(live))
@@ -146,7 +249,12 @@ async fn dependencies(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<DependencyHealthResponse>, ApiError> {
-    require_operator(&headers, &state.config.operator_role)?;
+    require_operator(
+        &headers,
+        &state,
+        AuthorizationActionV1::DependencyHealthRead,
+    )
+    .await?;
     let evaluation = state.readiness.evaluate();
     Ok(Json(DependencyHealthResponse {
         status: if evaluation.is_ready() {
@@ -192,7 +300,7 @@ async fn run_demo(
     Path(scenario): Path<String>,
     headers: HeaderMap,
 ) -> Result<Json<ScenarioReport>, ApiError> {
-    require_operator(&headers, &state.config.operator_role)?;
+    require_operator(&headers, &state, AuthorizationActionV1::LocalScenarioRun).await?;
     let scenario = match scenario.as_str() {
         "true" => LocalScenario::True,
         "invalid-then-valid" => LocalScenario::InvalidThenValid,
@@ -251,7 +359,7 @@ async fn run_mock_settlement_preflight(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Json<MockSettlementPreflightResponse>, ApiError> {
-    require_operator(&headers, &state.config.operator_role)?;
+    require_operator(&headers, &state, AuthorizationActionV1::SettlementPreflight).await?;
     let request: MockSettlementPreflightRequest =
         serde_json::from_slice(&body).map_err(|_| ApiError::InvalidSettlementPreflight)?;
     validate_mock_preflight_request(&request)?;
@@ -275,7 +383,7 @@ async fn run_mock_settlement_workflow(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Json<MockSettlementWorkflowResponse>, ApiError> {
-    require_operator(&headers, &state.config.operator_role)?;
+    require_operator(&headers, &state, AuthorizationActionV1::MockWorkflowRun).await?;
     if !body.is_empty() {
         return Err(ApiError::UnexpectedRequestBody);
     }
@@ -299,7 +407,12 @@ async fn refuse_mainnet_publish(
     headers: HeaderMap,
     _body: Bytes,
 ) -> Result<Json<Value>, ApiError> {
-    require_operator(&headers, &state.config.operator_role)?;
+    require_operator(
+        &headers,
+        &state,
+        AuthorizationActionV1::MainnetMutationAttempt,
+    )
+    .await?;
     Err(ApiError::MainnetMutationDisabled)
 }
 
@@ -363,15 +476,401 @@ fn validate_mock_preflight_request(
     Ok(())
 }
 
-fn require_operator(headers: &HeaderMap, expected_role: &str) -> Result<(), ApiError> {
-    let role = headers
-        .get("x-hsai-role")
-        .and_then(|value| value.to_str().ok());
-    if role == Some(expected_role) {
+async fn require_operator(
+    headers: &HeaderMap,
+    state: &AppState,
+    action: AuthorizationActionV1,
+) -> Result<(), ApiError> {
+    let header = headers.get("x-hsai-role");
+    let role = header.and_then(|value| value.to_str().ok());
+    if role == Some(state.config.operator_role.as_str()) {
         Ok(())
     } else {
+        let (actor_class, reason) = match (header, role) {
+            (None, _) => (
+                AuthorizationActorClassV1::Anonymous,
+                AuthorizationDenialReasonV1::MissingRole,
+            ),
+            (Some(_), None) => (
+                AuthorizationActorClassV1::UnauthenticatedCredentialPresenter,
+                AuthorizationDenialReasonV1::MalformedRole,
+            ),
+            (Some(_), Some(_)) => (
+                AuthorizationActorClassV1::UnauthenticatedCredentialPresenter,
+                AuthorizationDenialReasonV1::RoleMismatch,
+            ),
+        };
+        if let (Ok(request_id), Some(denied_at)) =
+            (next_server_request_id(state, action), server_denied_at())
+            && let Ok(record) = AuthorizationDenialRecordV1::new(
+                request_id,
+                "public-reader".to_owned(),
+                actor_class,
+                action,
+                reason,
+                denied_at,
+            )
+        {
+            // Audit failure never authorizes the operation and deliberately has
+            // the same external response as a successful durable append.
+            let _ = state.authorization_audit.record_denial(&record).await;
+        }
         Err(ApiError::Forbidden)
     }
+}
+
+fn next_server_request_id(
+    state: &AppState,
+    action: AuthorizationActionV1,
+) -> Result<String, outcomes_domain::CanonicalizationError> {
+    let sequence = state.request_sequence.fetch_add(1, Ordering::SeqCst);
+    server_request_id(&state.request_namespace, sequence, action)
+}
+
+fn server_request_id(
+    namespace: &str,
+    sequence: u64,
+    action: AuthorizationActionV1,
+) -> Result<String, outcomes_domain::CanonicalizationError> {
+    let digest = domain_separated_digest(
+        "hsai.api-authorization-request.v1",
+        &(namespace, sequence, action),
+    )?;
+    Ok(format!("request_{}", &digest.to_hex()[..32]))
+}
+
+fn server_denied_at() -> Option<UtcTimestamp> {
+    let now = time::OffsetDateTime::now_utc().replace_nanosecond(0).ok()?;
+    let encoded = now
+        .format(&time::format_description::well_known::Rfc3339)
+        .ok()?;
+    encoded.parse().ok()
+}
+
+const AUTHORIZATION_DENIAL_DB: &str = "authorization-denial.sqlite3";
+const AUTHORIZATION_DENIAL_REPORT: &str = "authorization-denial-report.json";
+const LOCAL_AUTHORIZATION_NAMESPACE: &str = "local-authorization-denial-v1";
+const AUTHORIZATION_DENIAL_CEILING: &str = "Controlled local API denial audit using the development role header and file-backed SQLite; no production IAM, distributed identity, credential validation, or hosted authorization claim.";
+
+/// Retained result of the controlled local authorization-denial composition.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LocalAuthorizationDenialReportV1 {
+    /// Fixed report schema.
+    pub schema_version: String,
+    /// Relative retained `SQLite` database.
+    pub database_file: String,
+    /// Fixed digest of the byte-identical public forbidden response.
+    pub forbidden_response_digest: Sha256Digest,
+    /// Exact sanitized denial records in request order.
+    pub denials: Vec<AuthorizationDenialRecordV1>,
+    /// Exact durable denial cardinality.
+    pub denial_count: u64,
+    /// Protected workflow effects reached by denied requests.
+    pub protected_effect_count: u64,
+    /// Precise evidence ceiling.
+    pub claim_ceiling: String,
+}
+
+/// Failure from the controlled local authorization-denial composition.
+#[derive(Debug, Error)]
+pub enum AuthorizationDenialAcceptanceError {
+    /// API construction failed.
+    #[error(transparent)]
+    Build(#[from] ApiBuildError),
+    /// Durable audit persistence failed.
+    #[error(transparent)]
+    Persistence(#[from] PersistenceError),
+    /// Artifact IO failed.
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    /// Typed artifact JSON failed.
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    /// A body could not be collected.
+    #[error(transparent)]
+    Body(#[from] axum::Error),
+    /// An internal local request could not be built.
+    #[error(transparent)]
+    Http(#[from] axum::http::Error),
+    /// Canonical identity construction failed.
+    #[error(transparent)]
+    Canonicalization(#[from] outcomes_domain::CanonicalizationError),
+    /// The local composed contract was violated.
+    #[error("authorization-denial acceptance invariant violated: {0}")]
+    Invariant(&'static str),
+}
+
+/// Run the five protected routes against a durable, sanitized denial audit.
+///
+/// # Errors
+///
+/// Returns a construction, persistence, artifact, or exact-contract failure.
+#[allow(clippy::too_many_lines)]
+pub async fn run_local_authorization_denial_acceptance(
+    artifact_root: &FsPath,
+) -> Result<LocalAuthorizationDenialReportV1, AuthorizationDenialAcceptanceError> {
+    fs::create_dir_all(artifact_root)?;
+    let database_path = artifact_root.join(AUTHORIZATION_DENIAL_DB);
+    if database_path.exists() {
+        return Err(AuthorizationDenialAcceptanceError::Invariant(
+            "authorization denial database already exists",
+        ));
+    }
+    let protected_artifact_root = artifact_root.join("protected-effects");
+    let store = SqliteStore::connect_path(&database_path, 1).await?;
+    store.migrate().await?;
+    let audit: Arc<dyn AuthorizationDenialAudit> =
+        Arc::new(SqliteAuthorizationDenialAudit::new(store.clone()));
+    let app = router_with_readiness_and_authorization_audit(
+        ApiConfig {
+            artifact_root: protected_artifact_root.clone(),
+            operator_role: "operator".to_owned(),
+        },
+        ReadinessMonitor::unconfigured(),
+        Arc::clone(&audit),
+        LOCAL_AUTHORIZATION_NAMESPACE.to_owned(),
+    )?;
+    let sentinel = "must-not-persist-role-or-body-sentinel";
+    let requests = [
+        (
+            AuthorizationActionV1::DependencyHealthRead,
+            "GET",
+            "/health/dependencies",
+            "",
+        ),
+        (
+            AuthorizationActionV1::LocalScenarioRun,
+            "POST",
+            "/v1/demo/secret-scenario",
+            sentinel,
+        ),
+        (
+            AuthorizationActionV1::SettlementPreflight,
+            "POST",
+            "/v1/settlement/mock/preflight",
+            sentinel,
+        ),
+        (
+            AuthorizationActionV1::MockWorkflowRun,
+            "POST",
+            "/v1/settlement/mock/workflow",
+            sentinel,
+        ),
+        (
+            AuthorizationActionV1::MainnetMutationAttempt,
+            "POST",
+            "/v1/settlement/mainnet/publish",
+            sentinel,
+        ),
+    ];
+    let mut forbidden_bytes: Option<Bytes> = None;
+    for (_, method, uri, body) in &requests {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(*method)
+                    .uri(*uri)
+                    .body(Body::from((*body).to_owned()))?,
+            )
+            .await
+            .map_err(infallible)?;
+        if response.status() != StatusCode::FORBIDDEN {
+            return Err(AuthorizationDenialAcceptanceError::Invariant(
+                "protected route did not return forbidden",
+            ));
+        }
+        let bytes = to_bytes(response.into_body(), 16_384).await?;
+        if let Some(expected) = &forbidden_bytes
+            && expected != &bytes
+        {
+            return Err(AuthorizationDenialAcceptanceError::Invariant(
+                "protected routes did not return byte-identical forbidden responses",
+            ));
+        }
+        forbidden_bytes = Some(bytes);
+    }
+    let allowed = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/health/dependencies")
+                .header("x-hsai-role", "operator")
+                .body(Body::empty())?,
+        )
+        .await
+        .map_err(infallible)?;
+    if allowed.status() == StatusCode::FORBIDDEN || protected_artifact_root.exists() {
+        return Err(AuthorizationDenialAcceptanceError::Invariant(
+            "authorized read was denied or a denied route reached protected effects",
+        ));
+    }
+    let mut denials = Vec::with_capacity(requests.len());
+    for (sequence, (action, _, _, _)) in requests.iter().enumerate() {
+        let request_id = server_request_id(
+            LOCAL_AUTHORIZATION_NAMESPACE,
+            u64::try_from(sequence).map_err(|_| {
+                AuthorizationDenialAcceptanceError::Invariant("request sequence overflow")
+            })?,
+            *action,
+        )?;
+        let identity =
+            domain_separated_digest("hsai.authorization-denial-id.v1", &(&request_id, *action))?;
+        let denial_id = format!("denial_{}", &identity.to_hex()[..32]);
+        let integrity = store
+            .authorization_denial_integrity(&denial_id)
+            .await?
+            .ok_or(AuthorizationDenialAcceptanceError::Invariant(
+                "durable denial missing",
+            ))?;
+        if integrity.row_count != 1 {
+            return Err(AuthorizationDenialAcceptanceError::Invariant(
+                "durable denial cardinality differs from one",
+            ));
+        }
+        denials.push(integrity.record);
+    }
+    let denial_count = store.authorization_denial_count().await?;
+    if denial_count
+        != u64::try_from(requests.len())
+            .map_err(|_| AuthorizationDenialAcceptanceError::Invariant("denial count overflow"))?
+    {
+        return Err(AuthorizationDenialAcceptanceError::Invariant(
+            "unexpected durable denial cardinality",
+        ));
+    }
+    let forbidden_bytes = forbidden_bytes.ok_or(AuthorizationDenialAcceptanceError::Invariant(
+        "forbidden response was not captured",
+    ))?;
+    let forbidden_response_digest =
+        Sha256Digest::from_bytes(sha2::Sha256::digest(&forbidden_bytes).into());
+    if forbidden_response_digest != expected_forbidden_response_digest()? {
+        return Err(AuthorizationDenialAcceptanceError::Invariant(
+            "forbidden response differs from the fixed public envelope",
+        ));
+    }
+    drop(app);
+    drop(audit);
+    store.checkpoint_and_close().await?;
+    reject_authorization_sqlite_sidecars(&database_path)?;
+    let database_bytes = fs::read(&database_path)?;
+    if [sentinel, "secret-scenario"]
+        .iter()
+        .any(|value| contains_bytes(&database_bytes, value.as_bytes()))
+    {
+        return Err(AuthorizationDenialAcceptanceError::Invariant(
+            "request material leaked into retained authorization database",
+        ));
+    }
+    let report = LocalAuthorizationDenialReportV1 {
+        schema_version: "hsai.local-authorization-denial-report.v1".to_owned(),
+        database_file: AUTHORIZATION_DENIAL_DB.to_owned(),
+        forbidden_response_digest,
+        denials,
+        denial_count,
+        protected_effect_count: 0,
+        claim_ceiling: AUTHORIZATION_DENIAL_CEILING.to_owned(),
+    };
+    let encoded = serde_json::to_vec_pretty(&report)?;
+    let retained_report = String::from_utf8_lossy(&encoded);
+    if [sentinel, "secret-scenario"]
+        .iter()
+        .any(|value| retained_report.contains(value))
+    {
+        return Err(AuthorizationDenialAcceptanceError::Invariant(
+            "request material leaked into retained report",
+        ));
+    }
+    fs::write(artifact_root.join(AUTHORIZATION_DENIAL_REPORT), encoded)?;
+    verify_local_authorization_denial_acceptance(artifact_root, &report).await?;
+    Ok(report)
+}
+
+/// Verify the retained denial report and database without mutation.
+///
+/// # Errors
+///
+/// Returns an artifact, identity, persistence, count, or report mismatch.
+pub async fn verify_local_authorization_denial_acceptance(
+    artifact_root: &FsPath,
+    expected: &LocalAuthorizationDenialReportV1,
+) -> Result<(), AuthorizationDenialAcceptanceError> {
+    let report: LocalAuthorizationDenialReportV1 =
+        serde_json::from_slice(&fs::read(artifact_root.join(AUTHORIZATION_DENIAL_REPORT))?)?;
+    if &report != expected
+        || report.schema_version != "hsai.local-authorization-denial-report.v1"
+        || report.database_file != AUTHORIZATION_DENIAL_DB
+        || report.denial_count != 5
+        || report.denials.len() != 5
+        || report.protected_effect_count != 0
+        || report.claim_ceiling != AUTHORIZATION_DENIAL_CEILING
+        || report.forbidden_response_digest != expected_forbidden_response_digest()?
+    {
+        return Err(AuthorizationDenialAcceptanceError::Invariant(
+            "retained denial report differs from the bounded contract",
+        ));
+    }
+    reject_authorization_sqlite_sidecars(&artifact_root.join(AUTHORIZATION_DENIAL_DB))?;
+    let store =
+        SqliteStore::connect_read_only(&artifact_root.join(AUTHORIZATION_DENIAL_DB)).await?;
+    if store.authorization_denial_count().await? != report.denial_count {
+        return Err(AuthorizationDenialAcceptanceError::Invariant(
+            "read-only denial count differs from report",
+        ));
+    }
+    for record in &report.denials {
+        record.verify_identity().map_err(|_| {
+            AuthorizationDenialAcceptanceError::Invariant("denial identity verification failed")
+        })?;
+        let integrity = store
+            .authorization_denial_integrity(&record.denial_id)
+            .await?
+            .ok_or(AuthorizationDenialAcceptanceError::Invariant(
+                "reported denial is absent from SQLite",
+            ))?;
+        if integrity.row_count != 1 || integrity.record != *record {
+            return Err(AuthorizationDenialAcceptanceError::Invariant(
+                "read-only denial integrity differs from report",
+            ));
+        }
+    }
+    store.close().await;
+    Ok(())
+}
+
+fn expected_forbidden_response_digest() -> Result<Sha256Digest, AuthorizationDenialAcceptanceError>
+{
+    let bytes = serde_json::to_vec(&json!({
+        "error_code": "FORBIDDEN",
+        "message": "operator role required",
+        "retryable": false,
+    }))?;
+    Ok(Sha256Digest::from_bytes(sha2::Sha256::digest(bytes).into()))
+}
+
+fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    !needle.is_empty()
+        && haystack
+            .windows(needle.len())
+            .any(|window| window == needle)
+}
+
+fn reject_authorization_sqlite_sidecars(
+    database_path: &FsPath,
+) -> Result<(), AuthorizationDenialAcceptanceError> {
+    for suffix in ["-wal", "-shm"] {
+        if PathBuf::from(format!("{}{suffix}", database_path.display())).exists() {
+            return Err(AuthorizationDenialAcceptanceError::Invariant(
+                "SQLite sidecar remains after checkpoint",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn infallible(value: Infallible) -> AuthorizationDenialAcceptanceError {
+    match value {}
 }
 
 #[derive(Debug, Error)]
@@ -450,6 +949,109 @@ mod tests {
     use tower::ServiceExt as _;
 
     use super::*;
+
+    #[derive(Debug)]
+    struct FailingAuthorizationAudit;
+
+    #[async_trait]
+    impl AuthorizationDenialAudit for FailingAuthorizationAudit {
+        async fn record_denial(
+            &self,
+            _record: &AuthorizationDenialRecordV1,
+        ) -> Result<(), AuthorizationAuditError> {
+            Err(AuthorizationAuditError)
+        }
+    }
+
+    #[tokio::test]
+    async fn acceptance_all_protected_routes_deny_and_reopen_with_durable_sanitized_audit()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let report = run_local_authorization_denial_acceptance(directory.path()).await?;
+        assert_eq!(report.denial_count, 5);
+        assert_eq!(report.protected_effect_count, 0);
+        assert_eq!(
+            report
+                .denials
+                .iter()
+                .map(|record| record.action)
+                .collect::<Vec<_>>(),
+            vec![
+                AuthorizationActionV1::DependencyHealthRead,
+                AuthorizationActionV1::LocalScenarioRun,
+                AuthorizationActionV1::SettlementPreflight,
+                AuthorizationActionV1::MockWorkflowRun,
+                AuthorizationActionV1::MainnetMutationAttempt,
+            ]
+        );
+        assert!(report.denials.iter().all(|record| {
+            record.actor_id == "public-reader"
+                && record.actor_class == AuthorizationActorClassV1::Anonymous
+                && record.reason == AuthorizationDenialReasonV1::MissingRole
+        }));
+        verify_local_authorization_denial_acceptance(directory.path(), &report).await?;
+        let retained = fs::read_to_string(directory.path().join(AUTHORIZATION_DENIAL_REPORT))?;
+        assert!(!retained.contains("must-not-persist"));
+        assert!(!directory.path().join("protected-effects").exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn contract_audit_failure_preserves_fixed_forbidden_and_never_executes_handler()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let app = router_with_readiness_and_authorization_audit(
+            ApiConfig {
+                artifact_root: directory.path().join("effects"),
+                operator_role: "operator".to_owned(),
+            },
+            ReadinessMonitor::unconfigured(),
+            Arc::new(FailingAuthorizationAudit),
+            "failing-audit-test".to_owned(),
+        )?;
+        let first = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/demo/unknown-sensitive-path")
+                    .body(Body::from("must-not-persist"))?,
+            )
+            .await?;
+        let second = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/settlement/mock/workflow")
+                    .body(Body::from("must-not-persist"))?,
+            )
+            .await?;
+        assert_eq!(first.status(), StatusCode::FORBIDDEN);
+        assert_eq!(second.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            to_bytes(first.into_body(), 16_384).await?,
+            to_bytes(second.into_body(), 16_384).await?
+        );
+        assert!(!directory.path().join("effects").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn contract_authorization_denial_report_rejects_unknown_fields()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut value = json!({
+            "schema_version": "hsai.local-authorization-denial-report.v1",
+            "database_file": AUTHORIZATION_DENIAL_DB,
+            "forbidden_response_digest": domain_separated_digest("test", &"response")?,
+            "denials": [],
+            "denial_count": 0,
+            "protected_effect_count": 0,
+            "claim_ceiling": AUTHORIZATION_DENIAL_CEILING,
+        });
+        value["private_key"] = json!("must-not-be-accepted");
+        assert!(serde_json::from_value::<LocalAuthorizationDenialReportV1>(value).is_err());
+        Ok(())
+    }
 
     #[derive(Debug)]
     struct FixedSnapshotProvider(Result<ReadinessSnapshot, ReadinessProviderError>);
