@@ -43,17 +43,16 @@ RUN_ID=20260712T120000Z
 BETA_PARENT="artifacts/local-beta"
 BETA_ROOT="${BETA_PARENT}/${RUN_ID}"
 pnpm run beta:local --run-id "${RUN_ID}"
-git rev-parse HEAD > "${BETA_ROOT}/git-commit.txt"
-rustc --version > "${BETA_ROOT}/rustc-version.txt"
-cargo --version > "${BETA_ROOT}/cargo-version.txt"
-pnpm --version > "${BETA_ROOT}/pnpm-version.txt"
+pnpm run beta:verify --run-id "${RUN_ID}"
 ```
 
-The rehearsal itself enforces and copies the embedded profile, executes the
-matrix serially, reloads all eight bundles from disk, verifies both dispute
-views, performs the required exported-file tamper rejection, and writes
-`beta-run-manifest.json`. The version files above are operator provenance added
-only after the command has atomically claimed the fresh run directory.
+The rehearsal itself requires a clean source tree, records bounded Git/tool and
+allowlisted-input provenance, enforces and copies the embedded profile, executes
+the matrix serially, reloads all eight bundles, verifies both dispute views,
+performs the required exported-file tamper rejection, and writes manifest v2.
+It then creates and immediately verifies `beta-artifact-inventory.json`. PASS is
+not returned for an unsealed run. `beta:finalize` exists only to recover an
+interrupted run that wrote a complete PASS manifest before inventory creation.
 
 When explicitly provisioned, the optional local infrastructure gates are:
 
@@ -125,27 +124,33 @@ decisions, supersession records, intents, receipts, reconciliations, gate logs,
 incident records, and final signoff. Treat the database and evidence artifacts
 as one recovery unit. Never retain private keys or a populated `.env` file.
 
-After review, generate a deterministic inventory from inside the run root:
+The CLI-generated inventory is the integrity boundary. Verify the retained copy
+from the repository root:
 
 ```sh
-cd "${BETA_ROOT}"
-find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 shasum -a 256 > SHA256SUMS
-shasum -a 256 -c SHA256SUMS
-chmod -R a-w .
+pnpm run beta:verify --run-id "${RUN_ID}"
 ```
 
-Copy the retained directory to its declared retention location, verify
-`SHA256SUMS` again there, and record the retention period and deletion approvers
-in the signoff. `PUBLIC` is the beta profile ceiling, but the operator and
-reviewer must still inspect the inventory for credentials, paths, private
-evidence, or personal data before sharing any artifact.
+Copy the sealed directory to its declared retention location and run the same
+read-only verifier against that parent. Any added, removed, or modified file,
+unsafe type, manifest/profile/provenance drift, evidence failure, or inventory
+tamper rejects. The inventory proves exact retained bytes, not content safety;
+the operator and reviewer must still inspect for credentials, private evidence,
+or personal data before sharing.
 
 ## Signoff and claim ceiling
 
-Copy `docs/templates/local-beta-signoff.md` into the run directory. The operator
-and independent reviewer must both sign the exact commit, profile digest,
-inventory digest, scenario matrix, deviations, retention decision, and final
-disposition. Permitted dispositions are `PASS`, `QUARANTINED`, and `INVALID`.
+Keep completed signoff as detached sibling metadata outside the sealed run root,
+for example `${BETA_ROOT}.signoff.md`; otherwise it would invalidate the exact
+inventory. The operator and reviewer must both sign the exact commit, profile
+digest, inventory digest, scenario matrix, deviations, retention decision, and
+final disposition. Permitted dispositions are `PASS`, `QUARANTINED`, and
+`INVALID`.
+
+Runs `beta-001` and `beta-002` predate manifest v2 provenance and automatic
+inventory sealing. They remain useful rehearsal evidence but are legacy,
+unsealed runs and cannot be upgraded or rewritten in place. Start a fresh
+`beta-003` or later run for the sealed beta contract.
 
 The only permitted claim is: controlled, trusted-operator, single-host local
 beta of a hermetic verifiable-outcome protocol with offline-verifiable evidence

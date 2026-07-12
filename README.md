@@ -82,10 +82,14 @@ run ID; the command refuses to overwrite an existing session:
 pnpm run beta:local --run-id beta-001
 ```
 
-The rehearsal runs all seven local scenarios serially, reload-verifies every
+The rehearsal requires a clean Git tree, records bounded source/tool/input
+provenance, runs all seven local scenarios serially, reload-verifies every
 evidence bundle, requires the expected tamper rejection, checks exact effect and
-finality ceilings, and writes `beta-run-manifest.json`. It performs no live
-market write and does not qualify hosted operation or arbitrary hostile code.
+finality ceilings, and writes `beta-run-manifest.json`. Before returning PASS it
+creates and verifies an exact-file `beta-artifact-inventory.json` seal. Verify a
+retained run in a fresh process with `pnpm run beta:verify --run-id beta-001`.
+It performs no live market write and does not qualify hosted operation,
+arbitrary hostile code, or signed build provenance.
 Follow [the local beta runbook](docs/outcomes/local-beta-runbook.md).
 
 See [architecture](docs/outcomes/architecture.md), [acceptance status](docs/outcomes/acceptance.md),
