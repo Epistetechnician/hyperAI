@@ -15,6 +15,10 @@ Implemented and tested locally does not mean production-ready.
   configuration, or seccomp/AppArmor policy for hostile production code.
 - SQLite transaction/concurrency behavior and PostgreSQL 16 migrations are
   tested. Production HA, backup/restore, and rolling-upgrade behavior are not.
+- Settlement crash recovery is joined across a file-backed SQLite restart and a
+  retained in-memory mock authority. This models application restart only; it
+  does not prove mock/backend process durability, host-crash recovery, live
+  network status lookup, or distributed exactly-once delivery.
 - Counterexample correction is tested locally with append-only SQLite history,
   PostgreSQL migration contracts, portable evidence, and mock settlement. The
   composed demo does not expose a production dispute endpoint, authenticate a

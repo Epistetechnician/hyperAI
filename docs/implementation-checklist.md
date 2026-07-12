@@ -47,7 +47,8 @@ architecture therefore follows the prompt's Rust greenfield branch.
 - [x] Phase 7: HIP-4 read-only metadata, network-scoped identity, binding, and
   stale-metadata detection.
 - [x] Phase 8: mock settlement, deterministic intents, manual handoff,
-  reconciliation, crash recovery, and mainnet refusal.
+  reconciliation, joined lost-receipt restart recovery without resubmission,
+  and mainnet refusal.
 - [x] Phase 9: threat model, runbooks, clean demo, complete gates, and handoff.
 
 ## Explicit external boundary

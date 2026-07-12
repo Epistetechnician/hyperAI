@@ -7,7 +7,7 @@ use outcomes_domain::{
     DisputeDecisionRecordV1, DisputeRecordV1, MutationContext, ReconciliationResultV1,
     ReconciliationStatus, ResolutionRecordV1, ResolutionSupersessionRecordV1, SettlementLifecycle,
     Sha256Digest, StateSlice, SubmissionReceiptV1, UndeclaredMutation, UnsignedSettlementIntentV1,
-    UtcTimestamp, canonical_json, domain_separated_digest,
+    UtcTimestamp, canonical_json, domain_separated_digest, submission_receipt_digest,
 };
 use serde_json::json;
 use sqlx::{
@@ -694,8 +694,7 @@ impl SqliteStore {
     ) -> Result<AppendOutcome, PersistenceError> {
         require_settlement_scope(context)?;
         let payload_json = serde_json::to_string(receipt)?;
-        let receipt_digest =
-            domain_separated_digest("hsai.persisted-settlement-receipt.v1", receipt)?;
+        let receipt_digest = submission_receipt_digest(receipt)?;
         let receipt_id = prefixed_id("receipt", receipt_digest);
         let mut transaction = self.pool.begin().await?;
 
@@ -832,8 +831,7 @@ impl SqliteStore {
                 });
             };
             let receipt: SubmissionReceiptV1 = serde_json::from_str(&receipt_payload)?;
-            let durable_receipt_digest =
-                domain_separated_digest("hsai.persisted-settlement-receipt.v1", &receipt)?;
+            let durable_receipt_digest = submission_receipt_digest(&receipt)?;
             if durable_receipt_digest != expected_receipt_digest {
                 return Err(PersistenceError::SettlementIdentityConflict {
                     identity: intent_id.to_owned(),
@@ -1451,7 +1449,11 @@ fn prefixed_id(prefix: &str, digest: Sha256Digest) -> String {
 
 #[cfg(test)]
 mod tests {
-    use outcomes_domain::{MutationScope, SettlementNetwork, fixtures::local_demo_claim_draft};
+    use hyperliquid_hip4::Hip4MockBackend;
+    use outcomes_domain::{
+        ClaimTruth, ExternalSideV1, MarketBindingV1, MutationScope, ResolutionFinality,
+        SettlementNetwork, fixtures::local_demo_claim_draft,
+    };
 
     use super::*;
 
@@ -1710,10 +1712,7 @@ mod tests {
             schema_version: "hsai.reconciliation-result.v1".to_owned(),
             binding_digest: intent.binding_digest,
             final_resolution_digest: intent.final_resolution_digest,
-            receipt_digest: Some(domain_separated_digest(
-                "hsai.persisted-settlement-receipt.v1",
-                receipt,
-            )?),
+            receipt_digest: Some(submission_receipt_digest(receipt)?),
             external_status_digest: digest("external-confirmed-status")?,
             status: ReconciliationStatus::Confirmed,
             settlement_lifecycle: SettlementLifecycle::Confirmed,
@@ -2162,28 +2161,101 @@ mod tests {
         Ok(())
     }
 
+    fn joined_recovery_records(
+        binding_digest: Sha256Digest,
+        resolution_digest: Sha256Digest,
+    ) -> Result<(MarketBindingV1, ResolutionRecordV1), Box<dyn std::error::Error>> {
+        let claim = local_demo_claim_draft()?.freeze()?;
+        let resolution = ResolutionRecordV1 {
+            schema_version: "hsai.resolution-record.v1".to_owned(),
+            resolution_id: "resolution_joined_recovery".to_owned(),
+            claim_id: claim.claim_id.clone(),
+            truth: ClaimTruth::True,
+            finality: ResolutionFinality::Final,
+            evidence_bundle_digest: digest("evidence")?,
+            attestation_digests: vec![digest("joined-attestation")?],
+            dispute_window_start: timestamp("2026-07-10T10:03:00Z")?,
+            dispute_window_end: timestamp("2026-07-10T10:04:00Z")?,
+            record_digest: resolution_digest,
+        };
+        let binding = MarketBindingV1 {
+            schema_version: "hsai.market-binding.v1".to_owned(),
+            backend: "mock-hip4".to_owned(),
+            network: SettlementNetwork::Mock,
+            external_market_id: "outcome-42".to_owned(),
+            external_question_id: None,
+            sides: vec![
+                ExternalSideV1 {
+                    side_index: 0,
+                    side_id: "side-0".to_owned(),
+                    display_name: "TRUE".to_owned(),
+                },
+                ExternalSideV1 {
+                    side_index: 1,
+                    side_id: "side-1".to_owned(),
+                    display_name: "FALSE".to_owned(),
+                },
+            ],
+            true_side_index: 0,
+            false_side_index: 1,
+            true_settlement_fraction: "1".to_owned(),
+            false_settlement_fraction: "0".to_owned(),
+            quote_token: None,
+            external_metadata_digest: digest("metadata")?,
+            raw_payload_digest: digest("raw-market")?,
+            claim_id: claim.claim_id.clone(),
+            claim_spec_digest: domain_separated_digest("hsai.claim-spec.v1", &claim)?,
+            external_claim_commitment: None,
+            expected_settlement_authority: Some("mock-authority".to_owned()),
+            capability_snapshot_digest: digest("capabilities")?,
+            capability_version: "test".to_owned(),
+            created_by: "operator-local".to_owned(),
+            created_at: timestamp("2026-07-10T10:04:00Z")?,
+            binding_signature: "development-binding-signature".to_owned(),
+            binding_digest,
+            invalidation_reason: None,
+        };
+        Ok((binding, resolution))
+    }
+
+    async fn settlement_record_counts(store: &SqliteStore) -> Result<(i64, i64, i64), sqlx::Error> {
+        Ok((
+            sqlx::query_scalar("SELECT COUNT(*) FROM settlement_intents")
+                .fetch_one(&store.pool)
+                .await?,
+            sqlx::query_scalar("SELECT COUNT(*) FROM settlement_receipts")
+                .fetch_one(&store.pool)
+                .await?,
+            sqlx::query_scalar("SELECT COUNT(*) FROM settlement_reconciliations")
+                .fetch_one(&store.pool)
+                .await?,
+        ))
+    }
+
     #[tokio::test]
     async fn contract_restart_after_external_acceptance_requires_reconciliation_not_resubmit()
     -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
-        let database_path = directory.path().join("settlement-recovery.db");
+        let database_path = directory.path().join("joined-settlement-recovery.db");
         let store = SqliteStore::connect_path(&database_path, 1).await?;
         store.migrate().await?;
         let (binding_digest, resolution_digest) = seed_settlement_dependencies(&store).await?;
         let intent = settlement_intent(binding_digest, resolution_digest)?;
-        let request_digest = digest("submit-request")?;
+        let (binding, resolution) = joined_recovery_records(binding_digest, resolution_digest)?;
+        let request_digest = domain_separated_digest("hsai.mock-hip4-request.v1", &intent)?;
         store
             .persist_settlement_intent(
-                &settlement_context("before-submit"),
+                &settlement_context("joined-before-submit"),
                 &intent,
                 request_digest,
                 &timestamp("2026-07-10T10:05:00Z")?,
             )
             .await?;
 
-        // The backend accepted exactly one effect, then the process crashed
-        // before the returned receipt could be persisted.
-        let external_effect_count = 1_u8;
+        let mut backend = Hip4MockBackend::default();
+        let lost_receipt = backend.submit(&intent, timestamp("2026-07-10T10:06:00Z")?)?;
+        assert_eq!(lost_receipt.request_digest, request_digest);
+        drop(lost_receipt);
         drop(store);
 
         let restarted = SqliteStore::connect_path(&database_path, 1).await?;
@@ -2191,62 +2263,81 @@ mod tests {
         let recovery = restarted
             .settlement_recovery_state(&intent.intent_id)
             .await?
-            .ok_or_else(|| std::io::Error::other("durable intent did not survive restart"))?;
-        assert_eq!(recovery.intent, intent);
-        assert_eq!(recovery.request_digest, request_digest);
-        assert!(recovery.receipt.is_none());
+            .ok_or_else(|| std::io::Error::other("durable intent missing after restart"))?;
         assert_eq!(
             recovery.action,
             SettlementRecoveryAction::QueryExternalStatus
         );
+        assert!(recovery.receipt.is_none());
+        assert_eq!(backend.submission_call_count(), 1);
 
-        // Authoritative status lookup returns the lost receipt; no second
-        // intent or external effect is created.
-        let recovered_receipt = settlement_receipt(&intent, request_digest)?;
-        restarted
-            .record_settlement_receipt(
-                &settlement_context("recover-receipt"),
-                &recovered_receipt,
-                &timestamp("2026-07-10T10:06:01Z")?,
-            )
-            .await?;
-        let reconciliation = confirmed_reconciliation(&intent, &recovered_receipt)?;
-        restarted
-            .record_settlement_reconciliation(
-                &settlement_context("recover-reconciliation"),
-                &intent.intent_id,
-                &reconciliation,
-            )
-            .await?;
+        let recovered_receipt = backend
+            .recover_receipt(&recovery.intent)?
+            .ok_or_else(|| std::io::Error::other("authoritative receipt missing"))?;
+        assert_eq!(recovered_receipt.request_digest, recovery.request_digest);
+        assert_eq!(backend.submission_call_count(), 1);
         assert_eq!(
             restarted
-                .persist_settlement_intent(
-                    &settlement_context("restart-intent-retry"),
-                    &intent,
-                    request_digest,
-                    &timestamp("2026-07-10T10:05:00Z")?,
+                .record_settlement_receipt(
+                    &settlement_context("joined-recover-receipt"),
+                    &recovered_receipt,
+                    &timestamp("2026-07-10T10:06:01Z")?,
+                )
+                .await?,
+            AppendOutcome::Inserted
+        );
+        let reconciliation =
+            backend.reconcile(&binding, &resolution, timestamp("2026-07-10T10:07:00Z")?)?;
+        assert_eq!(
+            reconciliation.receipt_digest,
+            Some(submission_receipt_digest(&recovered_receipt)?)
+        );
+        assert_eq!(
+            restarted
+                .record_settlement_reconciliation(
+                    &settlement_context("joined-recover-reconciliation"),
+                    &intent.intent_id,
+                    &reconciliation,
+                )
+                .await?,
+            AppendOutcome::Inserted
+        );
+        drop(restarted);
+
+        let complete_store = SqliteStore::connect_path(&database_path, 1).await?;
+        complete_store.migrate().await?;
+        let complete = complete_store
+            .settlement_recovery_state(&intent.intent_id)
+            .await?
+            .ok_or_else(|| std::io::Error::other("completed recovery state missing"))?;
+        assert_eq!(complete.action, SettlementRecoveryAction::Complete);
+        assert_eq!(complete.intent, intent);
+        assert_eq!(complete.request_digest, request_digest);
+        assert_eq!(complete.receipt, Some(recovered_receipt.clone()));
+        assert_eq!(complete.latest_reconciliation, Some(reconciliation.clone()));
+        assert_eq!(
+            complete_store
+                .record_settlement_receipt(
+                    &settlement_context("joined-replay-receipt"),
+                    &recovered_receipt,
+                    &timestamp("2026-07-10T10:06:01Z")?,
                 )
                 .await?,
             AppendOutcome::ExistingIdentical
         );
-        let complete = restarted
-            .settlement_recovery_state(&intent.intent_id)
-            .await?
-            .ok_or_else(|| std::io::Error::other("confirmed durable state is missing"))?;
-        assert_eq!(complete.action, SettlementRecoveryAction::Complete);
-        assert_eq!(external_effect_count, 1);
-        let counts: (i64, i64, i64) = (
-            sqlx::query_scalar("SELECT COUNT(*) FROM settlement_intents")
-                .fetch_one(&restarted.pool)
+        assert_eq!(
+            complete_store
+                .record_settlement_reconciliation(
+                    &settlement_context("joined-replay-reconciliation"),
+                    &intent.intent_id,
+                    &reconciliation,
+                )
                 .await?,
-            sqlx::query_scalar("SELECT COUNT(*) FROM settlement_receipts")
-                .fetch_one(&restarted.pool)
-                .await?,
-            sqlx::query_scalar("SELECT COUNT(*) FROM settlement_reconciliations")
-                .fetch_one(&restarted.pool)
-                .await?,
+            AppendOutcome::ExistingIdentical
         );
-        assert_eq!(counts, (1, 1, 1));
+        assert_eq!(settlement_record_counts(&complete_store).await?, (1, 1, 1));
+        assert_eq!(backend.submission_call_count(), 1);
+        assert_eq!(backend.effect_count(), 1);
         Ok(())
     }
 

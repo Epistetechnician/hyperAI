@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashMap};
 use outcomes_domain::{
     ExternalSideV1, MarketBindingV1, ReconciliationResultV1, ReconciliationStatus,
     ResolutionRecordV1, SettlementLifecycle, SettlementNetwork, Sha256Digest, SubmissionReceiptV1,
-    UnsignedSettlementIntentV1, UtcTimestamp, domain_separated_digest,
+    UnsignedSettlementIntentV1, UtcTimestamp, domain_separated_digest, submission_receipt_digest,
 };
 use outcomes_settlement::{BackendCapability, CapabilityMatrix, ExternalMarket};
 use serde::{Deserialize, Serialize};
@@ -110,6 +110,9 @@ pub enum Hip4Error {
     /// Intent has expired.
     #[error("settlement intent expired")]
     ExpiredIntent,
+    /// A recovery lookup reused an identity for different intent semantics.
+    #[error("mock recovery intent does not exactly match authoritative state")]
+    RecoveryIntentMismatch,
     /// Canonical digest construction failed.
     #[error("HIP-4 canonicalization failed: {0}")]
     Canonicalization(#[from] outcomes_domain::CanonicalizationError),
@@ -283,6 +286,7 @@ pub struct Hip4MockBackend {
     receipts: HashMap<String, SubmissionReceiptV1>,
     intents: HashMap<String, UnsignedSettlementIntentV1>,
     fail_next_submission: bool,
+    submission_call_count: usize,
 }
 
 impl Hip4MockBackend {
@@ -302,6 +306,7 @@ impl Hip4MockBackend {
         intent: &UnsignedSettlementIntentV1,
         accepted_at: UtcTimestamp,
     ) -> Result<SubmissionReceiptV1, Hip4Error> {
+        self.submission_call_count = self.submission_call_count.saturating_add(1);
         if intent.network == SettlementNetwork::HyperliquidMainnetReadonly {
             return Err(Hip4Error::MainnetMutationDisabled);
         }
@@ -340,6 +345,29 @@ impl Hip4MockBackend {
         Ok(receipt)
     }
 
+    /// Recover an authoritative receipt for the exact previously submitted intent.
+    ///
+    /// This lookup is read-only. It never submits, retries, or changes submission
+    /// accounting. A reused idempotency key with different intent semantics fails
+    /// closed rather than returning a receipt for an ambiguous request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Hip4Error::RecoveryIntentMismatch`] when authoritative state uses
+    /// the supplied idempotency key for a different full intent.
+    pub fn recover_receipt(
+        &self,
+        intent: &UnsignedSettlementIntentV1,
+    ) -> Result<Option<SubmissionReceiptV1>, Hip4Error> {
+        let Some(stored_intent) = self.intents.get(&intent.idempotency_key) else {
+            return Ok(None);
+        };
+        if stored_intent != intent {
+            return Err(Hip4Error::RecoveryIntentMismatch);
+        }
+        Ok(self.receipts.get(&intent.idempotency_key).cloned())
+    }
+
     /// Reconcile authoritative mock state without requiring a persisted receipt.
     ///
     /// This models recovery after backend acceptance but before local receipt
@@ -364,9 +392,7 @@ impl Hip4MockBackend {
                 ReconciliationStatus::Confirmed,
                 SettlementLifecycle::Confirmed,
                 "mock authoritative state matches final resolution",
-                receipt
-                    .map(|value| domain_separated_digest("hsai.submission-receipt.v1", value))
-                    .transpose()?,
+                receipt.map(submission_receipt_digest).transpose()?,
             )
         } else {
             (
@@ -396,6 +422,15 @@ impl Hip4MockBackend {
     #[must_use]
     pub fn effect_count(&self) -> usize {
         self.receipts.len()
+    }
+
+    /// Number of calls made to the mock submission boundary.
+    ///
+    /// Unlike [`Self::effect_count`], this includes idempotent retries and
+    /// rejected or injected-failure attempts.
+    #[must_use]
+    pub fn submission_call_count(&self) -> usize {
+        self.submission_call_count
     }
 }
 
@@ -584,12 +619,36 @@ mod tests {
         )?;
         let mut backend = Hip4MockBackend::default();
         let first = backend.submit(&intent, time("2026-07-10T12:00:00Z")?)?;
+        assert_eq!(backend.submission_call_count(), 1);
+        let recovered_receipt = backend
+            .recover_receipt(&intent)?
+            .ok_or("authoritative receipt was not recoverable")?;
+        assert_eq!(recovered_receipt, first);
+        assert_eq!(backend.submission_call_count(), 1);
+        assert_eq!(backend.effect_count(), 1);
+
+        let mut altered_intent = intent.clone();
+        altered_intent.canonical_payload = "{\"altered\":true}".to_owned();
+        assert!(matches!(
+            backend.recover_receipt(&altered_intent),
+            Err(Hip4Error::RecoveryIntentMismatch)
+        ));
+        let mut unknown_intent = intent.clone();
+        unknown_intent.idempotency_key = "unknown-settlement-intent".to_owned();
+        assert_eq!(backend.recover_receipt(&unknown_intent)?, None);
+        assert_eq!(backend.submission_call_count(), 1);
+
         let second = backend.submit(&intent, time("2026-07-10T12:00:01Z")?)?;
         assert_eq!(first, second);
         assert_eq!(backend.effect_count(), 1);
+        assert_eq!(backend.submission_call_count(), 2);
         let recovered =
             backend.reconcile(&binding, &final_record, time("2026-07-10T12:00:02Z")?)?;
         assert_eq!(recovered.status, ReconciliationStatus::Confirmed);
+        assert_eq!(
+            recovered.receipt_digest,
+            Some(submission_receipt_digest(&first)?)
+        );
         Ok(())
     }
 

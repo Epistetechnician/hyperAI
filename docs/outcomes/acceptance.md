@@ -33,9 +33,11 @@ the relevant invariants have focused tests but are not yet one composed path.
    digest failure; exported-file mutation through the CLI remains open.
 9. Stale market binding — `CONTRACT_TESTED`. Metadata drift fails preflight
    without rebinding.
-10. Settlement crash recovery — `SPLIT_CONTRACTS`. Durable restart recovery and
-    mock backend lost-receipt recovery pass separately; one joined path remains
-    open.
+10. Settlement crash recovery — `COMPOSED_TESTED`. One file-backed contract
+    persists the intent before a real mock submission, discards the returned
+    receipt, reopens SQLite, selects authoritative status lookup, recovers the
+    exact receipt without resubmission, persists reconciliation, reopens again,
+    and reaches complete durable state with one submission and one effect.
 11. Wrong network/mainnet mutation — `CONTRACT_TESTED`. Backend, API, and CLI
     reject mainnet mutation before signer or network processing.
 12. Unauthorized operation — `PARTIAL_CONTRACT`. Role-gated operations deny
@@ -49,8 +51,7 @@ the relevant invariants have focused tests but are not yet one composed path.
 16. Rights and capability gating — `CONTRACT_TESTED`. Missing item permission
     remains catalog/evaluation-only and cannot reach settlement readiness.
 
-The highest-impact remaining joined recovery gap is scenario 10 because durable
-restart recovery and mock lost-receipt recovery are tested separately rather
-than as one crash-spanning application path. The highest-impact API security gap
-is scenario 12 because authorization denial is not yet connected to durable
-audit persistence.
+The highest-impact remaining API security gap is scenario 12 because
+authorization denial is not yet connected to durable audit persistence. The
+next compact functional gap is scenario 8 because standalone tamper detection
+has not yet been exercised against an exported bundle through the CLI.

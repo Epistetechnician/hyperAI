@@ -13,6 +13,7 @@ sqlx.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+hyperliquid-hip4 = { path = "../hyperliquid-hip4" }
 outcomes-domain = { path = "../outcomes-domain", features = ["fixtures"] }
 tempfile.workspace = true
 tokio.workspace = true

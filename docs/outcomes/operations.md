@@ -64,6 +64,10 @@ edit the provisional record in place.
 Engage operator pause, preserve intent/request/response digests, query the
 backend’s authoritative status before retry, and reconcile by deterministic
 idempotency identity. Escalate ambiguous acceptance; never blind-resubmit.
+The mock recovery contract persists the intent first, then proves a lost receipt
+can be recovered by exact full-intent lookup after reopening SQLite. Receipt
+identity uses the shared `hsai.submission-receipt.v1` digest. Recovery lookup is
+read-only and does not increment backend submission-call accounting.
 
 ## Evidence-store outage and recovery
 
@@ -76,6 +80,6 @@ verification, then clear readiness. A database row is not evidence availability.
 Record migration checksums. Apply forward migrations before workers. Roll back
 application binaries only when schema compatibility is documented; never delete
 append-only evidence/audit rows. Restore testing must cover database plus object
-store consistency. Migrations 0001 and 0002 have been executed against ephemeral
+store consistency. Migrations 0001 through 0003 have been executed against ephemeral
 PostgreSQL 16, including settlement recovery tables, uniqueness, and append-only
 triggers; production upgrade/restore drills remain required.

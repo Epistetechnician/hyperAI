@@ -1482,6 +1482,7 @@ dependencies = [
 name = "outcomes-persistence-sqlx"
 version = "0.1.0"
 dependencies = [
+ "hyperliquid-hip4",
  "outcomes-domain",
  "serde",
  "serde_json",

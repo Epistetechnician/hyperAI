@@ -7,6 +7,7 @@ mod canonical;
 mod identifiers;
 mod model;
 mod mutation;
+mod receipt_identity;
 mod records;
 mod state;
 mod timestamp;
@@ -18,6 +19,7 @@ pub use canonical::{CanonicalizationError, canonical_json, domain_separated_dige
 pub use identifiers::{ClaimId, Sha256Digest};
 pub use model::*;
 pub use mutation::{MutationContext, MutationScope, StateSlice, UndeclaredMutation};
+pub use receipt_identity::submission_receipt_digest;
 pub use records::*;
 pub use state::{
     ClaimTruth, ExecutionOutcome, FinalityTransitionError, ResolutionFinality, SettlementLifecycle,
