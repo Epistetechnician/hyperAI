@@ -27,8 +27,10 @@ architecture therefore follows the prompt's Rust greenfield branch.
   reconciliation. Counterexample correction now composes provisional FALSE,
   settlement refusal, immutable dispute and decision records, recomputation,
   superseding quorum, FINAL TRUE, an explicit supersession edge, and one
-  confirmed mock effect. Remaining scenario-level gaps are tracked in
-  `docs/outcomes/acceptance.md`.
+  confirmed mock effect. Incomplete observation and divergent replay now each
+  compose through portable evidence, explicit resolution-proposal refusal, and
+  typed settlement ineligibility with no external effect. Remaining
+  scenario-level gaps are tracked in `docs/outcomes/acceptance.md`.
 - [x] Phase 5 local surface: machine-readable CLI, public/operator API auth,
   OpenAPI route contract, payload limit, granular mock settlement preflight and
   workflow, artifact-driven settlement CLI, fixed-cardinality operational

@@ -28,6 +28,9 @@ Implemented and tested locally does not mean production-ready.
   extract archives, or materialize OCI images.
 - External challenge sources do not attest live completeness. Only the hermetic
   local fixture reaches `SETTLEMENT_READY`.
+- Incomplete observation and divergent replay refusal are composed with local
+  injected fixtures. They do not establish behavior under a real distributed
+  source outage or cross-host nondeterministic validator deployment.
 - Live HIP-4 reading is optional and not a CI dependency. Public endpoint
   availability is not an SLA.
 - There is no verified testnet resolution publisher. Manual handoff and unsigned

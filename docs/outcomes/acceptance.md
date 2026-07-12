@@ -1,6 +1,6 @@
 # End-to-end acceptance status
 
-Status date: 2026-07-11. `COMPOSED_TESTED` means the scenario crosses its
+Status date: 2026-07-12. `COMPOSED_TESTED` means the scenario crosses its
 required application boundaries in one automated path. `CONTRACT_TESTED` means
 the relevant invariants have focused tests but are not yet one composed path.
 
@@ -13,12 +13,16 @@ the relevant invariants have focused tests but are not yet one composed path.
    candidates remain evidence; only candidate two is qualifying evidence.
 3. No solution — `COMPOSED_TESTED`. Complete empty observation after deadline
    and grace reaches FINAL FALSE without settlement publication.
-4. Incomplete observation — `CONTRACT_TESTED`. Source and resolution tests block
-   FALSE; composed unresolved-to-preflight refusal remains open.
+4. Incomplete observation — `COMPOSED_TESTED`. A post-grace local snapshot with
+   an injected pagination gap remains UNRESOLVED with `ObservationIncomplete`.
+   Portable evidence verifies, resolution proposal is refused, typed settlement
+   eligibility requires a final resolution, and no intent or effect is created.
 5. Runner error — `PARTIAL_COMPOSED`. Scripted ERROR reaches unresolved/no
    effect; live Docker timeout/output-flood classification is runner-level only.
-6. Nondeterministic validator — `CONTRACT_TESTED`. Divergent replay contracts
-   block resolution; composed evidence and settlement refusal remain open.
+6. Nondeterministic validator — `COMPOSED_TESTED`. PASS/FAIL executions for the
+   same candidate and frozen environment remain UNRESOLVED with
+   `ReplayDivergence`. Both manifests remain evidence, resolution proposal and
+   settlement eligibility fail closed, and no intent or effect is created.
 7. Dispute with counterexample — `COMPOSED_TESTED`. A provisional FALSE is
    refused by settlement preflight and blocked from finalization by an immutable
    counterexample dispute. A candidate observed and received before cutoff then
@@ -45,8 +49,8 @@ the relevant invariants have focused tests but are not yet one composed path.
 16. Rights and capability gating — `CONTRACT_TESTED`. Missing item permission
     remains catalog/evaluation-only and cannot reach settlement readiness.
 
-The highest-impact remaining composed functional gaps are scenarios 4 and 6:
-incomplete observation and divergent replay already fail closed in focused
-contracts, but their evidence-to-settlement refusal paths are not yet composed.
-The highest-impact API security gap is scenario 12 because authorization denial
-is not yet connected to durable audit persistence.
+The highest-impact remaining joined recovery gap is scenario 10 because durable
+restart recovery and mock lost-receipt recovery are tested separately rather
+than as one crash-spanning application path. The highest-impact API security gap
+is scenario 12 because authorization denial is not yet connected to durable
+audit persistence.

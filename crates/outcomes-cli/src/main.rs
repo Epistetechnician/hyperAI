@@ -133,6 +133,8 @@ enum ScenarioArg {
     InvalidThenValid,
     DisputedFalseCounterexampleTrue,
     False,
+    IncompleteObservation,
+    DivergentReplays,
     RunnerError,
 }
 
@@ -521,6 +523,8 @@ fn run_demo(args: DemoArgs) -> Result<Value, CliError> {
                     LocalScenario::DisputedFalseCounterexampleTrue
                 }
                 ScenarioArg::False => LocalScenario::False,
+                ScenarioArg::IncompleteObservation => LocalScenario::IncompleteObservation,
+                ScenarioArg::DivergentReplays => LocalScenario::DivergentReplays,
                 ScenarioArg::RunnerError => LocalScenario::RunnerError,
             };
             let report = run_local_scenario(scenario, &artifact_root)
@@ -775,6 +779,42 @@ mod tests {
         assert_eq!(output["truth"], "TRUE");
         assert_eq!(output["finality"], "FINAL");
         assert_eq!(output["mock_effect_count"], 1);
+        Ok(())
+    }
+
+    #[test]
+    fn contract_cli_unresolved_scenarios_refuse_settlement_eligibility()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for (scenario, outcomes) in [
+            (ScenarioArg::IncompleteObservation, json!([])),
+            (ScenarioArg::DivergentReplays, json!(["PASS", "FAIL"])),
+        ] {
+            let directory = tempfile::tempdir()?;
+            let output = run(Cli {
+                command: RootCommand::Outcomes(OutcomesArgs {
+                    command: OutcomesCommand::Demo(DemoArgs {
+                        command: DemoCommand::ComputationalMarket {
+                            scenario,
+                            artifact_root: directory.path().to_path_buf(),
+                            json: true,
+                        },
+                    }),
+                }),
+            })
+            .map_err(|error| std::io::Error::other(error.message))?;
+            assert_eq!(output["execution_outcomes"], outcomes);
+            assert_eq!(output["truth"], "UNRESOLVED");
+            assert_eq!(output["finality"], "NONE");
+            assert_eq!(output["mock_effect_count"], 0);
+            assert_eq!(
+                output["settlement_eligibility"]["blockers"],
+                json!(["RESOLUTION_REQUIRED", "FINAL_RESOLUTION_REQUIRED"])
+            );
+            assert_eq!(
+                output["settlement_eligibility"]["eligible_for_preflight"],
+                false
+            );
+        }
         Ok(())
     }
 }

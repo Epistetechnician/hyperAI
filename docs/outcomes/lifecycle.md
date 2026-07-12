@@ -24,6 +24,13 @@ non-settling superseding record. Active disputes, pauses, stale bindings,
 missing signatures, incomplete observation, and unsupported backend capability
 block settlement readiness.
 
+Settlement eligibility is evaluated before backend preflight. When no legal
+resolution record exists, the typed assessment returns `RESOLUTION_REQUIRED`
+and `FINAL_RESOLUTION_REQUIRED`; it never fabricates an unresolved resolution
+only to call backend preflight. Claim or evidence mismatches also fail this gate.
+Only an exact matching FINAL record can proceed to metadata and capability
+preflight.
+
 Settlement progresses through `UNBOUND`, `BOUND`, `NOT_READY`, `READY`,
 `INTENT_BUILT`, `SUBMITTED`, and `CONFIRMED`, with explicit `PAUSED` and
 `RECONCILIATION_FAILED` states. `CONFIRMED` is terminal. Unpausing returns to

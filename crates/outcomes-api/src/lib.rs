@@ -198,6 +198,8 @@ async fn run_demo(
         "invalid-then-valid" => LocalScenario::InvalidThenValid,
         "disputed-false-counterexample-true" => LocalScenario::DisputedFalseCounterexampleTrue,
         "false" => LocalScenario::False,
+        "incomplete-observation" => LocalScenario::IncompleteObservation,
+        "divergent-replays" => LocalScenario::DivergentReplays,
         "runner-error" => LocalScenario::RunnerError,
         _ => return Err(ApiError::UnknownScenario),
     };
@@ -787,6 +789,50 @@ mod tests {
         );
         assert_eq!(report.truth, outcomes_domain::ClaimTruth::True);
         assert_eq!(report.mock_effect_count, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn contract_unresolved_demo_scenarios_are_operator_gated_and_settlement_ineligible()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for scenario in ["incomplete-observation", "divergent-replays"] {
+            let directory = tempfile::tempdir()?;
+            let app = test_router(directory.path().to_path_buf())?;
+            let denied = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!("/v1/demo/{scenario}"))
+                        .body(Body::empty())?,
+                )
+                .await?;
+            assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+
+            let allowed = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!("/v1/demo/{scenario}"))
+                        .header("x-hsai-role", "operator")
+                        .body(Body::empty())?,
+                )
+                .await?;
+            assert_eq!(allowed.status(), StatusCode::OK);
+            let report: ScenarioReport =
+                serde_json::from_slice(&to_bytes(allowed.into_body(), 1_048_576).await?)?;
+            assert_eq!(report.truth, outcomes_domain::ClaimTruth::Unresolved);
+            assert_eq!(report.finality, outcomes_domain::ResolutionFinality::None);
+            assert_eq!(report.mock_effect_count, 0);
+            let eligibility = report
+                .settlement_eligibility
+                .ok_or_else(|| std::io::Error::other("missing eligibility refusal"))?;
+            assert!(!eligibility.eligible_for_preflight);
+            assert_eq!(
+                serde_json::to_value(eligibility)?["blockers"],
+                serde_json::json!(["RESOLUTION_REQUIRED", "FINAL_RESOLUTION_REQUIRED"])
+            );
+        }
         Ok(())
     }
 

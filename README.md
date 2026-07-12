@@ -35,6 +35,8 @@ pnpm run hsai outcomes demo computational-market --scenario true --artifact-root
 pnpm run hsai outcomes evidence verify artifacts/true/evidence-bundle.json --blob-root artifacts/true
 pnpm run hsai outcomes demo computational-market --scenario invalid-then-valid --artifact-root artifacts/invalid-then-valid --json
 pnpm run hsai outcomes demo computational-market --scenario disputed-false-counterexample-true --artifact-root artifacts/disputed-counterexample --json
+pnpm run hsai outcomes demo computational-market --scenario incomplete-observation --artifact-root artifacts/incomplete-observation --json
+pnpm run hsai outcomes demo computational-market --scenario divergent-replays --artifact-root artifacts/divergent-replays --json
 pnpm run hsai outcomes demo computational-market --scenario false --artifact-root artifacts/false --json
 pnpm run hsai outcomes demo computational-market --scenario runner-error --artifact-root artifacts/error --json
 pnpm run hsai outcomes settlement preflight --binding artifacts/true/market-binding.json --resolution artifacts/true/final-resolution.json --metadata fixtures/hip4/outcome-meta.json --capabilities artifacts/true/hip4-capabilities.json
@@ -51,6 +53,9 @@ retains a refused provisional FALSE, then uses a pre-cutoff candidate, immutable
 decision, superseding quorum, and explicit edge to reach FINAL TRUE. The FALSE
 demo finalizes only after complete deadline/grace observation and does not
 automatically publish. The runner-error demo remains `UNRESOLVED/NONE`.
+Incomplete-observation and divergent-replays remain `UNRESOLVED/NONE`, export
+verified evidence plus typed settlement-ineligibility artifacts, and create no
+resolution or external effect.
 
 ## Repository gates
 

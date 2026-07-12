@@ -17,16 +17,17 @@ use outcomes_evidence::{
     build_evidence_bundle, verify_evidence_bundle,
 };
 use outcomes_resolution::{
-    ResolutionError, ResolutionEvaluation, decide_dispute, evaluate_existential_claim,
-    finalize_resolution, finalize_superseding_resolution, link_resolution_supersession,
-    open_dispute, propose_resolution, propose_superseding_resolution,
+    ResolutionBlocker, ResolutionError, ResolutionEvaluation, decide_dispute,
+    evaluate_existential_claim, finalize_resolution, finalize_superseding_resolution,
+    link_resolution_supersession, open_dispute, propose_resolution, propose_superseding_resolution,
     resolution_aggregation_digest,
 };
 use outcomes_runner::{
     RunnerError, RunnerRequest, ScriptedRunner, VerificationRunner, evaluate_admission,
 };
 use outcomes_settlement::{
-    SettlementError, bind_market, build_intent, build_manual_handoff, preflight,
+    SettlementEligibilityAssessment, SettlementEligibilityBlocker, SettlementError,
+    assess_settlement_eligibility, bind_market, build_intent, build_manual_handoff, preflight,
 };
 use outcomes_source::{LocalSubmissionLedger, SourceError, SubmissionSourceAdapter};
 use serde::{Deserialize, Serialize};
@@ -44,6 +45,10 @@ pub enum LocalScenario {
     DisputedFalseCounterexampleTrue,
     /// Complete empty observation finalizes false after deadline and grace.
     False,
+    /// A pagination gap after deadline keeps the claim unresolved.
+    IncompleteObservation,
+    /// Conflicting replay outcomes keep the claim unresolved.
+    DivergentReplays,
     /// Runner error leaves truth unresolved and settlement-ineligible.
     RunnerError,
 }
@@ -71,6 +76,9 @@ pub struct ScenarioReport {
     pub reconciliation_status: Option<ReconciliationStatus>,
     /// Relative exported bundle path under the selected artifact root.
     pub evidence_bundle_file: String,
+    /// Read-only refusal before backend preflight when no final resolution exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settlement_eligibility: Option<SettlementEligibilityAssessment>,
 }
 
 /// Application composition failures.
@@ -491,6 +499,7 @@ fn run_disputed_false_counterexample_true(
         mock_effect_count: backend.effect_count(),
         reconciliation_status: Some(reconciliation.status),
         evidence_bundle_file: "replacement-evidence-bundle.json".to_owned(),
+        settlement_eligibility: None,
     })
 }
 
@@ -510,9 +519,14 @@ fn run_scenario_with_runner(
     let mut admissions = Vec::new();
     let mut executions = Vec::new();
 
-    if scenario != LocalScenario::False {
+    if !matches!(
+        scenario,
+        LocalScenario::False | LocalScenario::IncompleteObservation
+    ) {
         let candidate_inputs: Vec<(&str, &[u8], usize)> = match scenario {
-            LocalScenario::True => vec![("submission-1", b"hsai-pass-v1", 2)],
+            LocalScenario::True | LocalScenario::DivergentReplays => {
+                vec![("submission-1", b"hsai-pass-v1", 2)]
+            }
             LocalScenario::InvalidThenValid => vec![
                 ("submission-1", b"hsai-invalid-v1", 1),
                 ("submission-2", b"hsai-pass-v1", 2),
@@ -521,9 +535,15 @@ fn run_scenario_with_runner(
             LocalScenario::DisputedFalseCounterexampleTrue => {
                 unreachable!("dispute scenario has a dedicated composition")
             }
-            LocalScenario::False => unreachable!("false has no candidates"),
+            LocalScenario::False | LocalScenario::IncompleteObservation => {
+                unreachable!("empty-observation scenarios have no candidates")
+            }
         };
-        let mut scripted_runner = ScriptedRunner::exact_bytes_fixture();
+        let mut scripted_runner = if scenario == LocalScenario::DivergentReplays {
+            ScriptedRunner::new(vec![ExecutionOutcome::Pass, ExecutionOutcome::Fail])
+        } else {
+            ScriptedRunner::exact_bytes_fixture()
+        };
         for (candidate_index, (source_id, bytes, replay_count)) in
             candidate_inputs.into_iter().enumerate()
         {
@@ -605,7 +625,17 @@ fn run_scenario_with_runner(
             timestamp("2026-07-10T10:40:00Z")?,
             timestamp("2026-07-10T10:40:01Z")?,
         ),
-        LocalScenario::False => {
+        LocalScenario::False | LocalScenario::IncompleteObservation => {
+            ledger.finalize_through(timestamp("2026-07-10T12:05:00Z")?);
+            if scenario == LocalScenario::IncompleteObservation {
+                ledger.set_pagination_complete(false);
+            }
+            (
+                timestamp("2026-07-10T12:05:00Z")?,
+                timestamp("2026-07-10T12:05:01Z")?,
+            )
+        }
+        LocalScenario::DivergentReplays => {
             ledger.finalize_through(timestamp("2026-07-10T12:05:00Z")?);
             (
                 timestamp("2026-07-10T12:05:00Z")?,
@@ -690,6 +720,71 @@ fn run_scenario_with_runner(
     )?;
 
     if evaluation.truth == ClaimTruth::Unresolved {
+        let mut settlement_eligibility = None;
+        if matches!(
+            scenario,
+            LocalScenario::IncompleteObservation | LocalScenario::DivergentReplays
+        ) {
+            let expected_blocker = if scenario == LocalScenario::IncompleteObservation {
+                ResolutionBlocker::ObservationIncomplete
+            } else {
+                ResolutionBlocker::ReplayDivergence
+            };
+            if evaluation.blockers != vec![expected_blocker] {
+                return Err(ApplicationError::ScenarioInvariant(
+                    "acceptance refusal must retain its exact resolution blocker",
+                ));
+            }
+            if !matches!(
+                propose_resolution(
+                    claim,
+                    &evaluation,
+                    bundle.bundle_digest,
+                    &[],
+                    &AttestorRegistry::default(),
+                    &cutoff,
+                ),
+                Err(ResolutionError::UnresolvedProposal)
+            ) {
+                return Err(ApplicationError::ScenarioInvariant(
+                    "unresolved evidence must not produce a resolution record",
+                ));
+            }
+            let eligibility =
+                assess_settlement_eligibility(&claim.claim_id, bundle.bundle_digest, None);
+            if eligibility.eligible_for_preflight
+                || eligibility.blockers
+                    != vec![
+                        SettlementEligibilityBlocker::ResolutionRequired,
+                        SettlementEligibilityBlocker::FinalResolutionRequired,
+                    ]
+            {
+                return Err(ApplicationError::ScenarioInvariant(
+                    "unresolved evidence must fail settlement eligibility",
+                ));
+            }
+            fs::write(
+                artifact_root.join("observation-snapshot.json"),
+                serde_json::to_vec_pretty(&observation)?,
+            )?;
+            fs::write(
+                artifact_root.join("resolution-evaluation.json"),
+                serde_json::to_vec_pretty(&serde_json::json!({
+                    "truth": evaluation.truth,
+                    "qualifying_run_digests": evaluation.qualifying_run_digests,
+                    "blockers": evaluation
+                        .blockers
+                        .iter()
+                        .map(|blocker| format!("{blocker:?}"))
+                        .collect::<Vec<_>>(),
+                }))?,
+            )?;
+            fs::write(
+                artifact_root.join("settlement-eligibility.json"),
+                serde_json::to_vec_pretty(&eligibility)?,
+            )?;
+            settlement_eligibility = Some(eligibility);
+        }
         return Ok(ScenarioReport {
             claim_id: claim.claim_id.to_string(),
             execution_outcomes: execution_outcomes(&executions),
@@ -701,6 +796,7 @@ fn run_scenario_with_runner(
             mock_effect_count: 0,
             reconciliation_status: None,
             evidence_bundle_file: "evidence-bundle.json".to_owned(),
+            settlement_eligibility,
         });
     }
 
@@ -846,6 +942,7 @@ fn run_scenario_with_runner(
             mock_effect_count: backend.effect_count(),
             reconciliation_status: Some(reconciliation.status),
             evidence_bundle_file: "evidence-bundle.json".to_owned(),
+            settlement_eligibility: None,
         });
     }
 
@@ -863,6 +960,7 @@ fn run_scenario_with_runner(
         mock_effect_count: 0,
         reconciliation_status: None,
         evidence_bundle_file: "evidence-bundle.json".to_owned(),
+        settlement_eligibility: None,
     })
 }
 
@@ -1141,6 +1239,109 @@ mod tests {
             } else {
                 assert!(report.external_effect.starts_with("none;"));
                 assert_eq!(report.mock_effect_count, 0);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn acceptance_incomplete_observation_and_divergent_replays_refuse_settlement()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for (scenario, expected_outcomes, expected_blocker) in [
+            (
+                LocalScenario::IncompleteObservation,
+                Vec::new(),
+                "ObservationIncomplete",
+            ),
+            (
+                LocalScenario::DivergentReplays,
+                vec![ExecutionOutcome::Pass, ExecutionOutcome::Fail],
+                "ReplayDivergence",
+            ),
+        ] {
+            let directory = tempfile::tempdir()?;
+            let report = run_local_scenario(scenario, directory.path())?;
+
+            assert_eq!(report.execution_outcomes, expected_outcomes);
+            assert_eq!(report.truth, ClaimTruth::Unresolved);
+            assert_eq!(report.finality, ResolutionFinality::None);
+            assert!(report.evidence_verified);
+            assert_eq!(report.mock_effect_count, 0);
+            assert_eq!(report.reconciliation_status, None);
+            let eligibility = report
+                .settlement_eligibility
+                .as_ref()
+                .ok_or("missing settlement eligibility assessment")?;
+            assert!(!eligibility.eligible_for_preflight);
+            assert_eq!(
+                eligibility.blockers,
+                vec![
+                    SettlementEligibilityBlocker::ResolutionRequired,
+                    SettlementEligibilityBlocker::FinalResolutionRequired,
+                ]
+            );
+
+            let bundle: outcomes_domain::OutcomeEvidenceBundleV1 =
+                serde_json::from_slice(&fs::read(directory.path().join("evidence-bundle.json"))?)?;
+            let store = FileBlobStore::new(directory.path());
+            let mut standalone_blobs = HashMap::new();
+            for reference in &bundle.blobs {
+                standalone_blobs.insert(reference.digest, store.get(reference)?);
+            }
+            verify_evidence_bundle(&bundle, &standalone_blobs)?;
+            let observation: outcomes_domain::ObservationSnapshotV1 = serde_json::from_slice(
+                &fs::read(directory.path().join("observation-snapshot.json"))?,
+            )?;
+            let observation_digest =
+                domain_separated_digest("hsai.observation-snapshot.v1", &observation)?;
+            assert_eq!(
+                bundle.observation_snapshot_digests,
+                vec![observation_digest]
+            );
+            assert!(bundle.qualifying_candidate_digests.is_empty());
+            assert!(
+                bundle.execution_manifest_digests.is_empty()
+                    || scenario == LocalScenario::DivergentReplays
+            );
+            if scenario == LocalScenario::IncompleteObservation {
+                assert!(!observation.pagination_complete);
+                assert_eq!(
+                    observation.completeness,
+                    outcomes_domain::CompletenessStatus::Incomplete
+                );
+                assert!(bundle.execution_manifest_digests.is_empty());
+                assert!(bundle.admission_decision_digests.is_empty());
+            } else {
+                assert_eq!(bundle.execution_manifest_digests.len(), 2);
+                assert_eq!(bundle.admission_decision_digests.len(), 1);
+            }
+
+            let evaluation: serde_json::Value = serde_json::from_slice(&fs::read(
+                directory.path().join("resolution-evaluation.json"),
+            )?)?;
+            assert_eq!(evaluation["truth"], "UNRESOLVED");
+            assert_eq!(evaluation["qualifying_run_digests"], serde_json::json!([]));
+            assert_eq!(
+                evaluation["blockers"],
+                serde_json::json!([expected_blocker])
+            );
+            assert!(
+                directory
+                    .path()
+                    .join("settlement-eligibility.json")
+                    .is_file()
+            );
+            for forbidden in [
+                "provisional-resolution.json",
+                "final-resolution.json",
+                "settlement-intent.json",
+                "mock-receipt.json",
+                "mock-reconciliation.json",
+            ] {
+                assert!(
+                    !directory.path().join(forbidden).exists(),
+                    "unexpected {forbidden}"
+                );
             }
         }
         Ok(())

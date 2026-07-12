@@ -3,9 +3,9 @@
 use std::collections::BTreeSet;
 
 use outcomes_domain::{
-    ClaimSpecV1, ExternalSideV1, MarketBindingV1, ResolutionRecordV1, SettlementHandoffV1,
-    SettlementNetwork, Sha256Digest, UnsignedSettlementIntentV1, UtcTimestamp, canonical_json,
-    domain_separated_digest,
+    ClaimId, ClaimSpecV1, ExternalSideV1, MarketBindingV1, ResolutionFinality, ResolutionRecordV1,
+    SettlementHandoffV1, SettlementNetwork, Sha256Digest, UnsignedSettlementIntentV1, UtcTimestamp,
+    canonical_json, domain_separated_digest,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -77,6 +77,83 @@ pub struct SettlementPreflight {
     pub ready: bool,
     /// Exact non-readiness reasons.
     pub blockers: Vec<String>,
+}
+
+/// Exact reason a resolution cannot advance to backend settlement preflight.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum SettlementEligibilityBlocker {
+    /// No resolution record was supplied for the expected claim and evidence.
+    ResolutionRequired,
+    /// The supplied resolution is absent or has not reached immutable finality.
+    FinalResolutionRequired,
+    /// The supplied resolution belongs to a different claim.
+    ClaimMismatch,
+    /// The supplied resolution commits to a different evidence bundle.
+    EvidenceBundleMismatch,
+}
+
+/// Read-only resolution assessment before market and backend preflight.
+///
+/// This assessment binds the expected claim and evidence identities without
+/// manufacturing a resolution for an unresolved claim. Eligibility means only
+/// that a matching final record exists; metadata, binding, network, and backend
+/// capability checks remain the responsibility of [`preflight`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SettlementEligibilityAssessment {
+    /// Schema and domain-separation version.
+    pub schema_version: String,
+    /// Claim identity the caller expects to settle.
+    pub expected_claim_id: ClaimId,
+    /// Evidence identity the caller expects the resolution to commit to.
+    pub expected_evidence_bundle_digest: Sha256Digest,
+    /// Supplied resolution identity, absent when no resolution exists.
+    pub resolution_digest: Option<Sha256Digest>,
+    /// Supplied finality, absent when no resolution exists.
+    pub resolution_finality: Option<ResolutionFinality>,
+    /// Whether the supplied record may advance to market/backend preflight.
+    pub eligible_for_preflight: bool,
+    /// Exact fail-closed eligibility blockers.
+    pub blockers: Vec<SettlementEligibilityBlocker>,
+}
+
+/// Assess whether an exact resolution exists for later settlement preflight.
+///
+/// An absent resolution fails closed with both `RESOLUTION_REQUIRED` and
+/// `FINAL_RESOLUTION_REQUIRED`. A supplied record must be final and bind the
+/// expected claim and evidence bundle. This function performs no mutation and
+/// does not imply that backend [`preflight`] will succeed.
+#[must_use]
+pub fn assess_settlement_eligibility(
+    expected_claim_id: &ClaimId,
+    expected_evidence_bundle_digest: Sha256Digest,
+    resolution: Option<&ResolutionRecordV1>,
+) -> SettlementEligibilityAssessment {
+    let mut blockers = Vec::new();
+    if resolution.is_none() {
+        blockers.push(SettlementEligibilityBlocker::ResolutionRequired);
+    }
+    if resolution.is_none_or(|record| record.finality != ResolutionFinality::Final) {
+        blockers.push(SettlementEligibilityBlocker::FinalResolutionRequired);
+    }
+    if resolution.is_some_and(|record| &record.claim_id != expected_claim_id) {
+        blockers.push(SettlementEligibilityBlocker::ClaimMismatch);
+    }
+    if resolution
+        .is_some_and(|record| record.evidence_bundle_digest != expected_evidence_bundle_digest)
+    {
+        blockers.push(SettlementEligibilityBlocker::EvidenceBundleMismatch);
+    }
+    SettlementEligibilityAssessment {
+        schema_version: "hsai.settlement-eligibility-assessment.v1".to_owned(),
+        expected_claim_id: expected_claim_id.clone(),
+        expected_evidence_bundle_digest,
+        resolution_digest: resolution.map(|record| record.record_digest),
+        resolution_finality: resolution.map(|record| record.finality),
+        eligible_for_preflight: blockers.is_empty(),
+        blockers,
+    }
 }
 
 /// Backend-neutral settlement errors.
@@ -346,4 +423,105 @@ pub fn build_manual_handoff(
         replay_protection: intent.idempotency_key.clone(),
         hsai_handoff_signature,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use outcomes_domain::ClaimTruth;
+
+    use super::*;
+
+    fn resolution(
+        claim_id: ClaimId,
+        evidence_bundle_digest: Sha256Digest,
+        finality: ResolutionFinality,
+    ) -> Result<ResolutionRecordV1, outcomes_domain::TimestampError> {
+        Ok(ResolutionRecordV1 {
+            schema_version: "hsai.resolution-record.v1".to_owned(),
+            resolution_id: "resolution-eligibility-test".to_owned(),
+            claim_id,
+            truth: ClaimTruth::True,
+            finality,
+            evidence_bundle_digest,
+            attestation_digests: vec![Sha256Digest::from_bytes([3; 32])],
+            dispute_window_start: "2026-07-10T10:00:00Z".parse()?,
+            dispute_window_end: "2026-07-10T11:00:00Z".parse()?,
+            record_digest: Sha256Digest::from_bytes([4; 32]),
+        })
+    }
+
+    fn expected_claim_id() -> ClaimId {
+        ClaimId::from_digest(Sha256Digest::from_bytes([7; 32]))
+    }
+
+    #[test]
+    fn absent_resolution_fails_closed_with_both_required_blockers()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let claim_id = expected_claim_id();
+        let evidence_digest = Sha256Digest::from_bytes([1; 32]);
+
+        let assessment = assess_settlement_eligibility(&claim_id, evidence_digest, None);
+
+        assert!(!assessment.eligible_for_preflight);
+        assert_eq!(assessment.resolution_digest, None);
+        assert_eq!(assessment.resolution_finality, None);
+        assert_eq!(
+            assessment.blockers,
+            vec![
+                SettlementEligibilityBlocker::ResolutionRequired,
+                SettlementEligibilityBlocker::FinalResolutionRequired,
+            ]
+        );
+        assert_eq!(
+            serde_json::to_value(&assessment)?["blockers"],
+            serde_json::json!(["RESOLUTION_REQUIRED", "FINAL_RESOLUTION_REQUIRED"])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn supplied_resolution_reports_every_exact_binding_failure()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let claim_id = expected_claim_id();
+        let expected_evidence = Sha256Digest::from_bytes([1; 32]);
+        let wrong_claim = ClaimId::from_digest(Sha256Digest::from_bytes([9; 32]));
+        let record = resolution(
+            wrong_claim,
+            Sha256Digest::from_bytes([2; 32]),
+            ResolutionFinality::Provisional,
+        )?;
+
+        let assessment = assess_settlement_eligibility(&claim_id, expected_evidence, Some(&record));
+
+        assert!(!assessment.eligible_for_preflight);
+        assert_eq!(assessment.resolution_digest, Some(record.record_digest));
+        assert_eq!(
+            assessment.blockers,
+            vec![
+                SettlementEligibilityBlocker::FinalResolutionRequired,
+                SettlementEligibilityBlocker::ClaimMismatch,
+                SettlementEligibilityBlocker::EvidenceBundleMismatch,
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn exact_final_resolution_is_eligible_for_later_preflight()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let claim_id = expected_claim_id();
+        let evidence_digest = Sha256Digest::from_bytes([1; 32]);
+        let record = resolution(claim_id.clone(), evidence_digest, ResolutionFinality::Final)?;
+
+        let assessment = assess_settlement_eligibility(&claim_id, evidence_digest, Some(&record));
+
+        assert!(assessment.eligible_for_preflight);
+        assert!(assessment.blockers.is_empty());
+        assert_eq!(
+            assessment.resolution_finality,
+            Some(ResolutionFinality::Final)
+        );
+        assert_eq!(assessment.resolution_digest, Some(record.record_digest));
+        Ok(())
+    }
 }
