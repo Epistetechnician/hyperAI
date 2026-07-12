@@ -1,26 +1,84 @@
 //! HSAI command-line entrypoint.
 
-use std::{collections::HashMap, fs, path::PathBuf, process::ExitCode};
+use std::{
+    collections::HashMap,
+    fs,
+    path::{Path, PathBuf},
+    process::ExitCode,
+};
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use hyperliquid_hip4::{Hip4ReadOnlyBackend, decode_asset_id, encode_asset_ids};
-use outcomes_application::{LocalScenario, run_local_scenario};
+use outcomes_application::{LocalScenario, ScenarioReport, run_local_scenario};
 use outcomes_blobstore::FileBlobStore;
 use outcomes_corpus::{
     LocalMaterializationLimits, LocalMaterializationRequest, bundled_corpus_profiles,
     materialize_pinned_local_root,
 };
 use outcomes_domain::{
-    ClaimSpecDraftV1, ClaimSpecV1, MarketBindingV1, OutcomeEvidenceBundleV1,
-    ReconciliationResultV1, ResolutionRecordV1, SettlementNetwork, UnsignedSettlementIntentV1,
-    UtcTimestamp,
+    ClaimSpecDraftV1, ClaimSpecV1, ClaimTruth, ExecutionOutcome, MarketBindingV1,
+    OutcomeEvidenceBundleV1, ReconciliationResultV1, ReconciliationStatus, ResolutionFinality,
+    ResolutionRecordV1, SettlementNetwork, UnsignedSettlementIntentV1, UtcTimestamp,
+    domain_separated_digest,
 };
 use outcomes_evidence::verify_evidence_bundle;
-use outcomes_settlement::{CapabilityMatrix, build_intent, preflight};
+use outcomes_settlement::{
+    CapabilityMatrix, SettlementEligibilityBlocker, build_intent, preflight,
+};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 const CAPABILITIES: &str = include_str!("../../../config/adapter-capabilities.json");
 const CORPUS_PROFILES: &str = include_str!("../../../config/corpus-profiles.json");
+const LOCAL_BETA_PROFILE: &str = include_str!("../../../config/local-beta-profile.json");
+const BETA_SCENARIOS: [(&str, LocalScenario); 7] = [
+    ("true", LocalScenario::True),
+    ("false", LocalScenario::False),
+    ("invalid-then-valid", LocalScenario::InvalidThenValid),
+    (
+        "disputed-false-counterexample-true",
+        LocalScenario::DisputedFalseCounterexampleTrue,
+    ),
+    (
+        "incomplete-observation",
+        LocalScenario::IncompleteObservation,
+    ),
+    ("divergent-replays", LocalScenario::DivergentReplays),
+    ("runner-error", LocalScenario::RunnerError),
+];
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LocalBetaProfile {
+    schema_version: String,
+    profile_id: String,
+    network: String,
+    backend: String,
+    live_writes: bool,
+    serial_concurrency: u8,
+    scenarios: Vec<String>,
+    artifact_classification: String,
+    claim_ceiling: String,
+    stop_on_failure: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct BetaScenarioResult {
+    scenario: String,
+    status: &'static str,
+    truth: ClaimTruth,
+    finality: ResolutionFinality,
+    execution_outcomes: Vec<ExecutionOutcome>,
+    mock_effect_count: usize,
+    reconciliation_status: Option<ReconciliationStatus>,
+    evidence_bundles: Vec<BetaBundleResult>,
+}
+
+#[derive(Debug, Serialize)]
+struct BetaBundleResult {
+    relative_path: String,
+    bundle_digest: outcomes_domain::Sha256Digest,
+}
 
 #[derive(Debug, Parser)]
 #[command(name = "hsai", version, about = "HSAI verifiable outcome protocol")]
@@ -57,6 +115,25 @@ enum OutcomesCommand {
     Settlement(SettlementArgs),
     /// Pinned corpus profile inspection and local materialization.
     Corpus(CorpusArgs),
+    /// Controlled single-machine, mock-only beta operations.
+    Beta(BetaArgs),
+}
+
+#[derive(Debug, Args)]
+struct BetaArgs {
+    #[command(subcommand)]
+    command: BetaCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum BetaCommand {
+    /// Run the complete controlled local beta rehearsal without network writes.
+    Rehearse {
+        #[arg(long)]
+        artifact_root: PathBuf,
+        #[arg(long)]
+        run_id: String,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -267,8 +344,295 @@ fn run(cli: Cli) -> Result<Value, CliError> {
             OutcomesCommand::Hip4(hip4) => run_hip4(hip4),
             OutcomesCommand::Settlement(settlement) => run_settlement(settlement),
             OutcomesCommand::Corpus(corpus) => run_corpus(corpus),
+            OutcomesCommand::Beta(beta) => run_beta(beta),
         },
     }
+}
+
+fn run_beta(args: BetaArgs) -> Result<Value, CliError> {
+    match args.command {
+        BetaCommand::Rehearse {
+            artifact_root,
+            run_id,
+        } => run_beta_rehearsal(&artifact_root, &run_id),
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+fn run_beta_rehearsal(artifact_root: &Path, run_id: &str) -> Result<Value, CliError> {
+    validate_run_id(run_id)?;
+    let profile: LocalBetaProfile =
+        serde_json::from_str(LOCAL_BETA_PROFILE).map_err(CliError::internal)?;
+    validate_beta_profile(&profile)?;
+
+    fs::create_dir_all(artifact_root)
+        .map_err(|error| CliError::input("ARTIFACT_ROOT_CREATE_FAILED", &error.to_string()))?;
+    let run_root = artifact_root.join(run_id);
+    fs::create_dir(&run_root).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::AlreadyExists {
+            CliError::operation("BETA_RUN_COLLISION", "beta run directory already exists")
+        } else {
+            CliError::input("BETA_RUN_CREATE_FAILED", &error.to_string())
+        }
+    })?;
+    let profile_digest = domain_separated_digest("hsai.local-beta-profile.v1", &profile)
+        .map_err(CliError::internal)?;
+    fs::write(run_root.join("local-beta-profile.json"), LOCAL_BETA_PROFILE)
+        .map_err(|error| CliError::input("ARTIFACT_WRITE_FAILED", &error.to_string()))?;
+
+    let mut scenario_results = Vec::with_capacity(BETA_SCENARIOS.len());
+    for (name, scenario) in BETA_SCENARIOS {
+        let scenario_root = run_root.join(name);
+        let report = run_local_scenario(scenario, &scenario_root)
+            .map_err(|error| CliError::operation("BETA_SCENARIO_FAILED", &error.to_string()))?;
+        validate_scenario_report(name, &report)?;
+        let bundle_names: &[&str] = if scenario == LocalScenario::DisputedFalseCounterexampleTrue {
+            &[
+                "original-evidence-bundle.json",
+                "replacement-evidence-bundle.json",
+            ]
+        } else {
+            &["evidence-bundle.json"]
+        };
+        let mut bundles = Vec::with_capacity(bundle_names.len());
+        for bundle_name in bundle_names {
+            let bundle_path = scenario_root.join(bundle_name);
+            let digest = verify_bundle_from_disk(&bundle_path, &scenario_root)?;
+            bundles.push(BetaBundleResult {
+                relative_path: format!("{name}/{bundle_name}"),
+                bundle_digest: digest,
+            });
+        }
+        if bundles.last().map(|bundle| bundle.bundle_digest) != Some(report.evidence_bundle_digest)
+        {
+            return Err(CliError::operation(
+                "BETA_SCENARIO_MATRIX_MISMATCH",
+                "primary disk-verified bundle digest differs from the scenario report",
+            ));
+        }
+        fs::write(
+            scenario_root.join("scenario-report.json"),
+            serde_json::to_vec_pretty(&report).map_err(CliError::internal)?,
+        )
+        .map_err(|error| CliError::input("ARTIFACT_WRITE_FAILED", &error.to_string()))?;
+        scenario_results.push(BetaScenarioResult {
+            scenario: name.to_owned(),
+            status: "PASS",
+            truth: report.truth,
+            finality: report.finality,
+            execution_outcomes: report.execution_outcomes,
+            mock_effect_count: report.mock_effect_count,
+            reconciliation_status: report.reconciliation_status,
+            evidence_bundles: bundles,
+        });
+    }
+
+    run_exported_tamper_check(&run_root)?;
+    let manifest = json!({
+        "schema_version": "hsai.local-beta-run-manifest.v1",
+        "profile_schema_version": profile.schema_version,
+        "profile_id": profile.profile_id,
+        "profile_file": "local-beta-profile.json",
+        "profile_digest": profile_digest,
+        "run_id": run_id,
+        "status": "PASS",
+        "claim_ceiling": profile.claim_ceiling,
+        "artifact_classification": profile.artifact_classification,
+        "scenario_results": scenario_results,
+        "tamper_check": {"status": "PASS", "expected_result": "VERIFICATION_REJECTED"},
+        "external_effect": "mock only; no network writes",
+    });
+    fs::write(
+        run_root.join("beta-run-manifest.json"),
+        serde_json::to_vec_pretty(&manifest).map_err(CliError::internal)?,
+    )
+    .map_err(|error| CliError::input("ARTIFACT_WRITE_FAILED", &error.to_string()))?;
+    Ok(manifest)
+}
+
+fn validate_run_id(run_id: &str) -> Result<(), CliError> {
+    let valid = !run_id.is_empty()
+        && run_id.len() <= 64
+        && run_id
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && run_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'));
+    if !valid {
+        return Err(CliError::input(
+            "UNSAFE_BETA_RUN_ID",
+            "run ID must be 1-64 ASCII alphanumeric, hyphen, or underscore characters and start alphanumeric",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_beta_profile(profile: &LocalBetaProfile) -> Result<(), CliError> {
+    let expected = BETA_SCENARIOS
+        .iter()
+        .map(|(name, _)| (*name).to_owned())
+        .collect::<Vec<_>>();
+    if profile.schema_version != "hsai.local-beta-profile.v1"
+        || profile.profile_id != "hermetic-trusted-operator-v1"
+        || profile.network != "MOCK"
+        || profile.backend != "mock-hip4"
+        || profile.live_writes
+        || profile.serial_concurrency != 1
+        || profile.scenarios != expected
+        || profile.artifact_classification != "PUBLIC"
+        || !profile.stop_on_failure
+    {
+        return Err(CliError::operation(
+            "UNSAFE_LOCAL_BETA_PROFILE",
+            "local beta profile violates the frozen mock-only serial rehearsal contract",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_scenario_report(name: &str, report: &ScenarioReport) -> Result<(), CliError> {
+    let (truth, finality, outcomes, effects, reconciliation, requires_ineligibility) = match name {
+        "true" | "disputed-false-counterexample-true" => (
+            ClaimTruth::True,
+            ResolutionFinality::Final,
+            vec![ExecutionOutcome::Pass, ExecutionOutcome::Pass],
+            1,
+            Some(ReconciliationStatus::Confirmed),
+            false,
+        ),
+        "false" => (
+            ClaimTruth::False,
+            ResolutionFinality::Final,
+            vec![],
+            0,
+            None,
+            false,
+        ),
+        "invalid-then-valid" => (
+            ClaimTruth::True,
+            ResolutionFinality::Final,
+            vec![
+                ExecutionOutcome::Fail,
+                ExecutionOutcome::Pass,
+                ExecutionOutcome::Pass,
+            ],
+            1,
+            Some(ReconciliationStatus::Confirmed),
+            false,
+        ),
+        "incomplete-observation" => (
+            ClaimTruth::Unresolved,
+            ResolutionFinality::None,
+            vec![],
+            0,
+            None,
+            true,
+        ),
+        "divergent-replays" => (
+            ClaimTruth::Unresolved,
+            ResolutionFinality::None,
+            vec![ExecutionOutcome::Pass, ExecutionOutcome::Fail],
+            0,
+            None,
+            true,
+        ),
+        "runner-error" => (
+            ClaimTruth::Unresolved,
+            ResolutionFinality::None,
+            vec![ExecutionOutcome::Error],
+            0,
+            None,
+            false,
+        ),
+        _ => {
+            return Err(CliError::operation(
+                "BETA_SCENARIO_MATRIX_MISMATCH",
+                "unknown beta scenario",
+            ));
+        }
+    };
+    let ineligibility_matches = if requires_ineligibility {
+        report
+            .settlement_eligibility
+            .as_ref()
+            .is_some_and(|assessment| {
+                !assessment.eligible_for_preflight
+                    && assessment.blockers
+                        == [
+                            SettlementEligibilityBlocker::ResolutionRequired,
+                            SettlementEligibilityBlocker::FinalResolutionRequired,
+                        ]
+            })
+    } else {
+        report.settlement_eligibility.is_none()
+    };
+    if report.truth != truth
+        || report.finality != finality
+        || report.execution_outcomes != outcomes
+        || report.mock_effect_count != effects
+        || report.reconciliation_status != reconciliation
+        || !report.evidence_verified
+        || !ineligibility_matches
+    {
+        return Err(CliError::operation(
+            "BETA_SCENARIO_MATRIX_MISMATCH",
+            "scenario report violated the frozen truth/finality/outcome/effect matrix",
+        ));
+    }
+    Ok(())
+}
+
+fn verify_bundle_from_disk(
+    bundle_path: &Path,
+    blob_root: &Path,
+) -> Result<outcomes_domain::Sha256Digest, CliError> {
+    let bundle: OutcomeEvidenceBundleV1 = read_json_path(bundle_path)?;
+    let store = FileBlobStore::new(blob_root);
+    let mut blobs = HashMap::new();
+    for reference in &bundle.blobs {
+        let bytes = store
+            .get(reference)
+            .map_err(|error| CliError::verification(&error.to_string()))?;
+        blobs.insert(reference.digest, bytes);
+    }
+    verify_evidence_bundle(&bundle, &blobs)
+        .map_err(|error| CliError::verification(&error.to_string()))?;
+    Ok(bundle.bundle_digest)
+}
+
+fn run_exported_tamper_check(run_root: &Path) -> Result<(), CliError> {
+    let source = run_root.join("true/evidence-bundle.json");
+    let tamper_root = run_root.join("tamper-check");
+    fs::create_dir(&tamper_root)
+        .map_err(|error| CliError::input("ARTIFACT_WRITE_FAILED", &error.to_string()))?;
+    let mut value: Value = read_json_path(&source)?;
+    let byte_length = value["blobs"][0]["byte_length"]
+        .as_u64()
+        .ok_or_else(|| CliError::internal("true bundle has no blob byte length"))?;
+    value["blobs"][0]["byte_length"] = Value::from(byte_length.saturating_add(1));
+    let tampered = tamper_root.join("evidence-bundle.json");
+    fs::write(
+        &tampered,
+        serde_json::to_vec_pretty(&value).map_err(CliError::internal)?,
+    )
+    .map_err(|error| CliError::input("ARTIFACT_WRITE_FAILED", &error.to_string()))?;
+    match verify_bundle_from_disk(&tampered, &run_root.join("true")) {
+        Err(error) if error.code == "VERIFICATION_FAILED" => Ok(()),
+        Err(error) => Err(error),
+        Ok(_) => Err(CliError::operation(
+            "BETA_TAMPER_CHECK_FAILED",
+            "tampered exported evidence was accepted",
+        )),
+    }
+}
+
+fn read_json_path<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, CliError> {
+    let bytes =
+        fs::read(path).map_err(|error| CliError::input("FILE_READ_FAILED", &error.to_string()))?;
+    serde_json::from_slice(&bytes)
+        .map_err(|error| CliError::input("INVALID_JSON", &error.to_string()))
 }
 
 fn run_corpus(args: CorpusArgs) -> Result<Value, CliError> {
@@ -603,6 +967,19 @@ mod tests {
 
     use super::*;
 
+    fn beta_cli(artifact_root: PathBuf, run_id: &str) -> Cli {
+        Cli {
+            command: RootCommand::Outcomes(OutcomesArgs {
+                command: OutcomesCommand::Beta(BetaArgs {
+                    command: BetaCommand::Rehearse {
+                        artifact_root,
+                        run_id: run_id.to_owned(),
+                    },
+                }),
+            }),
+        }
+    }
+
     fn intent(
         network: SettlementNetwork,
     ) -> Result<UnsignedSettlementIntentV1, Box<dyn std::error::Error>> {
@@ -815,6 +1192,98 @@ mod tests {
                 false
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn contract_beta_rehearsal_verifies_matrix_bundles_and_tamper_rejection()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let output = run(beta_cli(directory.path().to_path_buf(), "beta-001"))
+            .map_err(|error| std::io::Error::other(error.message))?;
+        assert_eq!(output["status"], "PASS");
+        assert_eq!(output["external_effect"], "mock only; no network writes");
+        assert_eq!(output["tamper_check"]["status"], "PASS");
+        let scenarios = output["scenario_results"]
+            .as_array()
+            .ok_or("scenario results missing")?;
+        assert_eq!(scenarios.len(), 7);
+        assert_eq!(
+            scenarios
+                .iter()
+                .map(|value| value["mock_effect_count"].as_u64().unwrap_or_default())
+                .collect::<Vec<_>>(),
+            vec![1, 0, 1, 1, 0, 0, 0]
+        );
+        assert_eq!(
+            scenarios[3]["evidence_bundles"].as_array().map(Vec::len),
+            Some(2)
+        );
+        let run_root = directory.path().join("beta-001");
+        assert!(run_root.join("beta-run-manifest.json").is_file());
+        let copied_profile: LocalBetaProfile =
+            read_json_path(&run_root.join("local-beta-profile.json"))
+                .map_err(|error| std::io::Error::other(error.message))?;
+        let copied_profile_digest =
+            domain_separated_digest("hsai.local-beta-profile.v1", &copied_profile)?;
+        assert_eq!(
+            output["profile_digest"],
+            serde_json::to_value(copied_profile_digest)?
+        );
+        assert_eq!(output["profile_file"], "local-beta-profile.json");
+        assert!(run_root.join("tamper-check/evidence-bundle.json").is_file());
+        for scenario in scenarios {
+            for bundle in scenario["evidence_bundles"]
+                .as_array()
+                .ok_or("bundle results missing")?
+            {
+                assert!(
+                    run_root
+                        .join(bundle["relative_path"].as_str().ok_or("path")?)
+                        .is_file()
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn contract_beta_rehearsal_rejects_unsafe_id_and_existing_run()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let unsafe_error = run(beta_cli(directory.path().to_path_buf(), "../escape"))
+            .err()
+            .ok_or("unsafe ID must fail")?;
+        assert_eq!(unsafe_error.code, "UNSAFE_BETA_RUN_ID");
+        fs::create_dir(directory.path().join("existing"))?;
+        let collision = run(beta_cli(directory.path().to_path_buf(), "existing"))
+            .err()
+            .ok_or("existing run must fail")?;
+        assert_eq!(collision.code, "BETA_RUN_COLLISION");
+        Ok(())
+    }
+
+    #[test]
+    fn contract_beta_profile_rejects_live_writes_and_scenario_drift()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut profile: LocalBetaProfile = serde_json::from_str(LOCAL_BETA_PROFILE)?;
+        profile.profile_id = "unapproved-local-profile".to_owned();
+        let identity_error = validate_beta_profile(&profile)
+            .err()
+            .ok_or("profile ID drift must fail")?;
+        assert_eq!(identity_error.code, "UNSAFE_LOCAL_BETA_PROFILE");
+        profile.profile_id = "hermetic-trusted-operator-v1".to_owned();
+        profile.live_writes = true;
+        let live_error = validate_beta_profile(&profile)
+            .err()
+            .ok_or("live writes must fail")?;
+        assert_eq!(live_error.code, "UNSAFE_LOCAL_BETA_PROFILE");
+        profile.live_writes = false;
+        profile.scenarios.swap(0, 1);
+        let drift_error = validate_beta_profile(&profile)
+            .err()
+            .ok_or("scenario drift must fail")?;
+        assert_eq!(drift_error.code, "UNSAFE_LOCAL_BETA_PROFILE");
         Ok(())
     }
 }

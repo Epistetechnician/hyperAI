@@ -73,6 +73,21 @@ dependencies. For Docker, preload the image and export
 `HSAI_TEST_OCI_PLATFORM` (`linux/arm64` or `linux/amd64`), then run `pnpm run
 verify:infra-oci`. The gate never pulls an image.
 
+## Controlled local beta
+
+The trusted-operator, single-host beta is hermetic and mock-only. Use a fresh
+run ID; the command refuses to overwrite an existing session:
+
+```sh
+pnpm run beta:local -- --run-id beta-001
+```
+
+The rehearsal runs all seven local scenarios serially, reload-verifies every
+evidence bundle, requires the expected tamper rejection, checks exact effect and
+finality ceilings, and writes `beta-run-manifest.json`. It performs no live
+market write and does not qualify hosted operation or arbitrary hostile code.
+Follow [the local beta runbook](docs/outcomes/local-beta-runbook.md).
+
 See [architecture](docs/outcomes/architecture.md), [acceptance status](docs/outcomes/acceptance.md),
 [HIP-4 status](docs/outcomes/hyperliquid-hip4.md), [limitations](docs/outcomes/limitations.md),
 and the [threat model](docs/threat-model.md).

@@ -12,6 +12,7 @@
     "verify:external-readonly": "cargo test -p hyperliquid-hip4 --features live-readonly -- --ignored",
     "verify:infra-postgres": "cargo test -p outcomes-persistence-sqlx tests::contract_postgres_migrations_apply_in_isolated_schema -- --ignored --exact",
     "verify:infra-oci": "cargo test -p outcomes-runner external_docker -- --ignored --test-threads=1 && cargo test -p outcomes-application tests::external_docker_true_path_reaches_final_mock_settlement -- --ignored --exact --test-threads=1",
+    "beta:local": "cargo run -p outcomes-cli -- outcomes beta rehearse --artifact-root artifacts/local-beta",
     "hsai": "cargo run -p outcomes-cli"
   }
 }

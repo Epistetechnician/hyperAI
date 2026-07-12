@@ -1,0 +1,20 @@
+{
+  "schema_version": "hsai.local-beta-profile.v1",
+  "profile_id": "hermetic-trusted-operator-v1",
+  "network": "MOCK",
+  "backend": "mock-hip4",
+  "live_writes": false,
+  "serial_concurrency": 1,
+  "scenarios": [
+    "true",
+    "false",
+    "invalid-then-valid",
+    "disputed-false-counterexample-true",
+    "incomplete-observation",
+    "divergent-replays",
+    "runner-error"
+  ],
+  "artifact_classification": "PUBLIC",
+  "claim_ceiling": "Controlled, trusted-operator, single-host local beta of a hermetic verifiable-outcome protocol with offline-verifiable evidence and idempotent in-memory mock settlement; no live market creation or settlement, production sandbox, production IAM, HA/DR, live-source completeness, cross-host determinism, or exactly-once external delivery claim.",
+  "stop_on_failure": true
+}

@@ -29,8 +29,10 @@ the relevant invariants have focused tests but are not yet one composed path.
    produces two PASS replays, an accepted terminal decision, superseding quorum,
    FINAL TRUE, one idempotent mock effect, and confirmed reconciliation. The
    original record and both evidence views remain append-only artifacts.
-8. Tampered evidence — `CONTRACT_TESTED`. Standalone verification identifies
-   digest failure; exported-file mutation through the CLI remains open.
+8. Tampered evidence — `COMPOSED_TESTED`. The controlled-beta CLI copies an
+   exported bundle, mutates a digest-bound field, reloads it through the same
+   standalone verifier, and requires typed rejection before rehearsal can pass.
+   Unsupported schema versions are also rejected explicitly.
 9. Stale market binding — `CONTRACT_TESTED`. Metadata drift fails preflight
    without rebinding.
 10. Settlement crash recovery — `COMPOSED_TESTED`. One file-backed contract
@@ -53,5 +55,5 @@ the relevant invariants have focused tests but are not yet one composed path.
 
 The highest-impact remaining API security gap is scenario 12 because
 authorization denial is not yet connected to durable audit persistence. The
-next compact functional gap is scenario 8 because standalone tamper detection
-has not yet been exercised against an exported bundle through the CLI.
+next functional integration gaps are the live Docker classification portion of
+scenario 5 and composed stale-binding refusal in scenario 9.

@@ -43,6 +43,8 @@ pub struct EvidenceBundleInput {
 pub enum EvidenceError {
     #[error("evidence payload is not canonicalizable: {0}")]
     Canonicalization(#[from] outcomes_domain::CanonicalizationError),
+    #[error("unsupported evidence bundle schema version {0}")]
+    UnsupportedBundleSchema(String),
     #[error("evidence bundle digest mismatch")]
     BundleDigestMismatch,
     #[error("referenced blob {0} is unavailable")]
@@ -115,6 +117,11 @@ pub fn verify_evidence_bundle<S: BuildHasher>(
     bundle: &OutcomeEvidenceBundleV1,
     blobs: &HashMap<Sha256Digest, Vec<u8>, S>,
 ) -> Result<(), EvidenceError> {
+    if bundle.schema_version != "hsai.outcome-evidence-bundle.v1" {
+        return Err(EvidenceError::UnsupportedBundleSchema(
+            bundle.schema_version.clone(),
+        ));
+    }
     let input = EvidenceBundleInput::from(bundle);
     if bundle_digest_from_input(&input)? != bundle.bundle_digest {
         return Err(EvidenceError::BundleDigestMismatch);
@@ -590,6 +597,18 @@ mod tests {
         assert!(matches!(
             verify_evidence_bundle(&bundle, &blobs),
             Err(EvidenceError::BlobDigestMismatch { .. })
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn contract_bundle_schema_tamper_is_rejected() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut bundle, blobs) = test_bundle()?;
+        bundle.schema_version = "hsai.outcome-evidence-bundle.v2".to_owned();
+        assert!(matches!(
+            verify_evidence_bundle(&bundle, &blobs),
+            Err(EvidenceError::UnsupportedBundleSchema(version))
+                if version == "hsai.outcome-evidence-bundle.v2"
         ));
         Ok(())
     }

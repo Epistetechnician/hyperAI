@@ -2,6 +2,12 @@
 
 Implemented and tested locally does not mean production-ready.
 
+- The controlled local beta profile is an immutable-config operating boundary,
+  not a hosted runtime deployment mechanism. The CLI loads and enforces its
+  exact mock-only, serial seven-scenario contract, binds the copied profile into
+  each run manifest, and refuses stale run-directory reuse. Operator and
+  independent-reviewer signoff remain required.
+
 - The local Docker candidate verifier is tested with a preloaded digest-pinned
   Alpine image for controls, exact inputs, PASS/FAIL, timeout, output flood,
   cleanup, evidence, finality, and mock reconciliation. The Docker host and
