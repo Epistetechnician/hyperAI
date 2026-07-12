@@ -42,7 +42,7 @@ git status --short
 RUN_ID=20260712T120000Z
 BETA_PARENT="artifacts/local-beta"
 BETA_ROOT="${BETA_PARENT}/${RUN_ID}"
-pnpm run beta:local -- --run-id "${RUN_ID}"
+pnpm run beta:local --run-id "${RUN_ID}"
 git rev-parse HEAD > "${BETA_ROOT}/git-commit.txt"
 rustc --version > "${BETA_ROOT}/rustc-version.txt"
 cargo --version > "${BETA_ROOT}/cargo-version.txt"

@@ -79,7 +79,7 @@ The trusted-operator, single-host beta is hermetic and mock-only. Use a fresh
 run ID; the command refuses to overwrite an existing session:
 
 ```sh
-pnpm run beta:local -- --run-id beta-001
+pnpm run beta:local --run-id beta-001
 ```
 
 The rehearsal runs all seven local scenarios serially, reload-verifies every
