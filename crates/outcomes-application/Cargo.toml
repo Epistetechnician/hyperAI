@@ -11,6 +11,7 @@ outcomes-blobstore = { path = "../outcomes-blobstore" }
 outcomes-corpus = { path = "../outcomes-corpus" }
 outcomes-domain = { path = "../outcomes-domain", features = ["fixtures"] }
 outcomes-evidence = { path = "../outcomes-evidence" }
+outcomes-persistence-sqlx = { path = "../outcomes-persistence-sqlx" }
 outcomes-resolution = { path = "../outcomes-resolution" }
 outcomes-runner = { path = "../outcomes-runner" }
 outcomes-settlement = { path = "../outcomes-settlement" }
@@ -18,6 +19,7 @@ outcomes-source = { path = "../outcomes-source" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

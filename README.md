@@ -85,11 +85,15 @@ pnpm run beta:local --run-id beta-001
 The rehearsal requires a clean Git tree, records bounded source/tool/input
 provenance, runs all seven local scenarios serially, reload-verifies every
 evidence bundle, requires the expected tamper rejection, checks exact effect and
-finality ceilings, and writes `beta-run-manifest.json`. Before returning PASS it
-creates and verifies an exact-file `beta-artifact-inventory.json` seal. Verify a
-retained run in a fresh process with `pnpm run beta:verify --run-id beta-001`.
+finality ceilings, and exercises lost-receipt recovery across an application
+restart using file-backed SQLite and the retained mock authority. It writes
+manifest v3 with raw digests for the recovery report and database. Before
+returning PASS it creates and verifies an exact-file
+`beta-artifact-inventory.json` seal. Verify a retained run in a fresh process
+with `pnpm run beta:verify --run-id beta-004`.
 It performs no live market write and does not qualify hosted operation,
-arbitrary hostile code, or signed build provenance.
+arbitrary hostile code, backend-process or host-crash durability, or signed
+build provenance.
 Follow [the local beta runbook](docs/outcomes/local-beta-runbook.md).
 
 See [architecture](docs/outcomes/architecture.md), [acceptance status](docs/outcomes/acceptance.md),

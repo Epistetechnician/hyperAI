@@ -12,7 +12,10 @@ use std::{
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use hyperliquid_hip4::{Hip4ReadOnlyBackend, decode_asset_id, encode_asset_ids};
-use outcomes_application::{LocalScenario, ScenarioReport, run_local_scenario};
+use outcomes_application::{
+    LocalRecoveryReportV1, LocalScenario, ScenarioReport, run_local_lost_receipt_recovery,
+    run_local_scenario, verify_local_lost_receipt_recovery,
+};
 use outcomes_blobstore::FileBlobStore;
 use outcomes_corpus::{
     LocalMaterializationLimits, LocalMaterializationRequest, bundled_corpus_profiles,
@@ -30,6 +33,7 @@ use outcomes_settlement::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use beta_inventory::{finalize_run_inventory, verify_run_inventory};
 use beta_provenance::{
@@ -39,7 +43,8 @@ use beta_provenance::{
 
 const CAPABILITIES: &str = include_str!("../../../config/adapter-capabilities.json");
 const CORPUS_PROFILES: &str = include_str!("../../../config/corpus-profiles.json");
-const LOCAL_BETA_PROFILE: &str = include_str!("../../../config/local-beta-profile.json");
+const LEGACY_LOCAL_BETA_PROFILE: &str = include_str!("../../../config/local-beta-profile.json");
+const LOCAL_BETA_PROFILE: &str = include_str!("../../../config/local-beta-profile-v2.json");
 const BETA_SCENARIOS: [(&str, LocalScenario); 7] = [
     ("true", LocalScenario::True),
     ("false", LocalScenario::False),
@@ -66,6 +71,22 @@ struct LocalBetaProfile {
     live_writes: bool,
     serial_concurrency: u8,
     scenarios: Vec<String>,
+    artifact_classification: String,
+    claim_ceiling: String,
+    stop_on_failure: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LocalBetaProfileV2 {
+    schema_version: String,
+    profile_id: String,
+    network: String,
+    backend: String,
+    live_writes: bool,
+    serial_concurrency: u8,
+    scenarios: Vec<String>,
+    operational_checks: Vec<String>,
     artifact_classification: String,
     claim_ceiling: String,
     stop_on_failure: bool,
@@ -113,6 +134,37 @@ struct BetaRunManifestV2 {
     claim_ceiling: String,
     artifact_classification: String,
     scenario_results: Vec<BetaScenarioResult>,
+    tamper_check: BetaTamperCheck,
+    external_effect: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct BetaOperationalCheckResult {
+    check: String,
+    status: String,
+    report_file: String,
+    report_digest: outcomes_domain::Sha256Digest,
+    database_file: String,
+    database_digest: outcomes_domain::Sha256Digest,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BetaRunManifestV3 {
+    schema_version: String,
+    profile_schema_version: String,
+    profile_id: String,
+    profile_file: String,
+    profile_digest: outcomes_domain::Sha256Digest,
+    provenance_file: String,
+    provenance_digest: outcomes_domain::Sha256Digest,
+    run_id: String,
+    status: String,
+    claim_ceiling: String,
+    artifact_classification: String,
+    scenario_results: Vec<BetaScenarioResult>,
+    operational_checks: Vec<BetaOperationalCheckResult>,
     tamper_check: BetaTamperCheck,
     external_effect: String,
 }
@@ -421,23 +473,39 @@ fn run_beta(args: BetaArgs) -> Result<Value, CliError> {
     }
 }
 
-fn embedded_beta_profile() -> Result<(LocalBetaProfile, outcomes_domain::Sha256Digest), CliError> {
+fn embedded_legacy_beta_profile()
+-> Result<(LocalBetaProfile, outcomes_domain::Sha256Digest), CliError> {
     let profile: LocalBetaProfile =
-        serde_json::from_str(LOCAL_BETA_PROFILE).map_err(CliError::internal)?;
+        serde_json::from_str(LEGACY_LOCAL_BETA_PROFILE).map_err(CliError::internal)?;
     validate_beta_profile(&profile)?;
     let digest = domain_separated_digest("hsai.local-beta-profile.v1", &profile)
         .map_err(CliError::internal)?;
     Ok((profile, digest))
 }
 
+fn embedded_beta_profile_v2()
+-> Result<(LocalBetaProfileV2, outcomes_domain::Sha256Digest), CliError> {
+    let profile: LocalBetaProfileV2 =
+        serde_json::from_str(LOCAL_BETA_PROFILE).map_err(CliError::internal)?;
+    validate_beta_profile_v2(&profile)?;
+    let digest = domain_separated_digest("hsai.local-beta-profile.v2", &profile)
+        .map_err(CliError::internal)?;
+    Ok((profile, digest))
+}
+
 fn finalize_beta_run(artifact_root: &Path, run_id: &str) -> Result<Value, CliError> {
     validate_run_id(run_id)?;
-    let (profile, profile_digest) = embedded_beta_profile()?;
     let run_root = artifact_root.join(run_id);
-    verify_beta_run_semantics(&run_root, run_id, &profile)?;
+    let profile_digest = verify_beta_run_semantics(&run_root, run_id)?;
     let inventory =
         finalize_run_inventory(&run_root, run_id, profile_digest).map_err(map_inventory_error)?;
-    verify_beta_run_semantics(&run_root, run_id, &profile)?;
+    let verified_profile_digest = verify_beta_run_semantics(&run_root, run_id)?;
+    if verified_profile_digest != profile_digest {
+        return Err(CliError::operation(
+            "BETA_PROFILE_DIGEST_MISMATCH",
+            "profile identity changed during beta finalization",
+        ));
+    }
     let verified =
         verify_run_inventory(&run_root, run_id, profile_digest).map_err(map_inventory_error)?;
     if inventory != verified {
@@ -451,9 +519,8 @@ fn finalize_beta_run(artifact_root: &Path, run_id: &str) -> Result<Value, CliErr
 
 fn verify_beta_run(artifact_root: &Path, run_id: &str) -> Result<Value, CliError> {
     validate_run_id(run_id)?;
-    let (profile, profile_digest) = embedded_beta_profile()?;
     let run_root = artifact_root.join(run_id);
-    verify_beta_run_semantics(&run_root, run_id, &profile)?;
+    let profile_digest = verify_beta_run_semantics(&run_root, run_id)?;
     let inventory =
         verify_run_inventory(&run_root, run_id, profile_digest).map_err(map_inventory_error)?;
     serde_json::to_value(inventory).map_err(CliError::internal)
@@ -463,6 +530,21 @@ fn map_inventory_error(error: beta_inventory::InventoryError) -> CliError {
     let code = error.code;
     drop(error);
     CliError::operation(code, "beta retained-artifact inventory verification failed")
+}
+
+fn beta_runtime() -> Result<tokio::runtime::Runtime, CliError> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(CliError::internal)
+}
+
+fn raw_file_digest(path: &Path) -> Result<outcomes_domain::Sha256Digest, CliError> {
+    let bytes =
+        fs::read(path).map_err(|error| CliError::input("FILE_READ_FAILED", &error.to_string()))?;
+    Ok(outcomes_domain::Sha256Digest::from_bytes(
+        Sha256::digest(bytes).into(),
+    ))
 }
 
 #[allow(clippy::too_many_lines)]
@@ -482,9 +564,9 @@ fn run_beta_rehearsal_with_provider_and_seal(
     seal: bool,
 ) -> Result<Value, CliError> {
     validate_run_id(run_id)?;
-    let profile: LocalBetaProfile =
+    let profile: LocalBetaProfileV2 =
         serde_json::from_str(LOCAL_BETA_PROFILE).map_err(CliError::internal)?;
-    validate_beta_profile(&profile)?;
+    validate_beta_profile_v2(&profile)?;
     let provenance = provenance_provider
         .collect(Path::new("."))
         .map_err(|error| {
@@ -507,7 +589,7 @@ fn run_beta_rehearsal_with_provider_and_seal(
             CliError::input("BETA_RUN_CREATE_FAILED", &error.to_string())
         }
     })?;
-    let profile_digest = domain_separated_digest("hsai.local-beta-profile.v1", &profile)
+    let profile_digest = domain_separated_digest("hsai.local-beta-profile.v2", &profile)
         .map_err(CliError::internal)?;
     fs::write(run_root.join("local-beta-profile.json"), LOCAL_BETA_PROFILE)
         .map_err(|error| CliError::input("ARTIFACT_WRITE_FAILED", &error.to_string()))?;
@@ -564,9 +646,36 @@ fn run_beta_rehearsal_with_provider_and_seal(
         });
     }
 
+    let recovery_root = run_root.join("operational-checks/sqlite-settlement-recovery");
+    let recovery_report = beta_runtime()?
+        .block_on(run_local_lost_receipt_recovery(&recovery_root))
+        .map_err(|error| {
+            CliError::operation("BETA_OPERATIONAL_CHECK_FAILED", &error.to_string())
+        })?;
+    let recovery_report_path = recovery_root.join("local-recovery-report.json");
+    let recovery_database_path = recovery_root.join("settlement-recovery.sqlite3");
+    let operational_checks = vec![BetaOperationalCheckResult {
+        check: "sqlite-settlement-recovery".to_owned(),
+        status: "PASS".to_owned(),
+        report_file: "operational-checks/sqlite-settlement-recovery/local-recovery-report.json"
+            .to_owned(),
+        report_digest: raw_file_digest(&recovery_report_path)?,
+        database_file: "operational-checks/sqlite-settlement-recovery/settlement-recovery.sqlite3"
+            .to_owned(),
+        database_digest: raw_file_digest(&recovery_database_path)?,
+    }];
+    beta_runtime()?
+        .block_on(verify_local_lost_receipt_recovery(
+            &recovery_root,
+            &recovery_report,
+        ))
+        .map_err(|error| {
+            CliError::operation("BETA_OPERATIONAL_CHECK_FAILED", &error.to_string())
+        })?;
+
     run_exported_tamper_check(&run_root)?;
     let manifest = json!({
-        "schema_version": "hsai.local-beta-run-manifest.v2",
+        "schema_version": "hsai.local-beta-run-manifest.v3",
         "profile_schema_version": profile.schema_version,
         "profile_id": profile.profile_id,
         "profile_file": "local-beta-profile.json",
@@ -578,6 +687,7 @@ fn run_beta_rehearsal_with_provider_and_seal(
         "claim_ceiling": profile.claim_ceiling,
         "artifact_classification": profile.artifact_classification,
         "scenario_results": scenario_results,
+        "operational_checks": operational_checks,
         "tamper_check": {"status": "PASS", "expected_result": "VERIFICATION_REJECTED"},
         "external_effect": "mock only; no network writes",
     });
@@ -623,6 +733,30 @@ fn validate_beta_profile(profile: &LocalBetaProfile) -> Result<(), CliError> {
         || profile.live_writes
         || profile.serial_concurrency != 1
         || profile.scenarios != expected
+        || profile.artifact_classification != "PUBLIC"
+        || !profile.stop_on_failure
+    {
+        return Err(CliError::operation(
+            "UNSAFE_LOCAL_BETA_PROFILE",
+            "local beta profile violates the frozen mock-only serial rehearsal contract",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_beta_profile_v2(profile: &LocalBetaProfileV2) -> Result<(), CliError> {
+    let expected = BETA_SCENARIOS
+        .iter()
+        .map(|(name, _)| (*name).to_owned())
+        .collect::<Vec<_>>();
+    if profile.schema_version != "hsai.local-beta-profile.v2"
+        || profile.profile_id != "hermetic-trusted-operator-v2"
+        || profile.network != "MOCK"
+        || profile.backend != "mock-hip4"
+        || profile.live_writes
+        || profile.serial_concurrency != 1
+        || profile.scenarios != expected
+        || profile.operational_checks != ["sqlite-settlement-recovery"]
         || profile.artifact_classification != "PUBLIC"
         || !profile.stop_on_failure
     {
@@ -728,6 +862,30 @@ fn validate_scenario_report(name: &str, report: &ScenarioReport) -> Result<(), C
 
 #[allow(clippy::too_many_lines)]
 fn verify_beta_run_semantics(
+    run_root: &Path,
+    run_id: &str,
+) -> Result<outcomes_domain::Sha256Digest, CliError> {
+    let manifest: Value = read_json_path(&run_root.join("beta-run-manifest.json"))?;
+    match manifest.get("schema_version").and_then(Value::as_str) {
+        Some("hsai.local-beta-run-manifest.v2") => {
+            let (profile, digest) = embedded_legacy_beta_profile()?;
+            verify_beta_run_semantics_v2(run_root, run_id, &profile)?;
+            Ok(digest)
+        }
+        Some("hsai.local-beta-run-manifest.v3") => {
+            let (profile, digest) = embedded_beta_profile_v2()?;
+            verify_beta_run_semantics_v3(run_root, run_id, &profile)?;
+            Ok(digest)
+        }
+        _ => Err(CliError::operation(
+            "BETA_MANIFEST_UNSUPPORTED_SCHEMA",
+            "sealed beta verification requires run manifest v2 or v3",
+        )),
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+fn verify_beta_run_semantics_v2(
     run_root: &Path,
     run_id: &str,
     profile: &LocalBetaProfile,
@@ -881,6 +1039,185 @@ fn verify_beta_run_semantics(
         ));
     }
     verify_exported_tamper_artifact(run_root)
+}
+
+#[allow(clippy::too_many_lines)]
+fn verify_beta_run_semantics_v3(
+    run_root: &Path,
+    run_id: &str,
+    profile: &LocalBetaProfileV2,
+) -> Result<(), CliError> {
+    let manifest: BetaRunManifestV3 = read_json_path(&run_root.join("beta-run-manifest.json"))?;
+    let expected_profile_digest = domain_separated_digest("hsai.local-beta-profile.v2", profile)
+        .map_err(CliError::internal)?;
+    if manifest.schema_version != "hsai.local-beta-run-manifest.v3"
+        || manifest.run_id != run_id
+        || manifest.status != "PASS"
+        || manifest.profile_schema_version != profile.schema_version
+        || manifest.profile_id != profile.profile_id
+        || manifest.profile_file != "local-beta-profile.json"
+        || manifest.profile_digest != expected_profile_digest
+        || manifest.provenance_file != "run-provenance.json"
+        || manifest.claim_ceiling != profile.claim_ceiling
+        || manifest.artifact_classification != profile.artifact_classification
+        || manifest.external_effect != "mock only; no network writes"
+        || manifest.tamper_check.status != "PASS"
+        || manifest.tamper_check.expected_result != "VERIFICATION_REJECTED"
+    {
+        return Err(CliError::operation(
+            "BETA_MANIFEST_SEMANTICS_MISMATCH",
+            "beta manifest identity, profile, status, or claim boundary differs from the frozen contract",
+        ));
+    }
+    let copied_profile: LocalBetaProfileV2 =
+        read_json_path(&run_root.join("local-beta-profile.json"))?;
+    validate_beta_profile_v2(&copied_profile)?;
+    let copied_profile_digest =
+        domain_separated_digest("hsai.local-beta-profile.v2", &copied_profile)
+            .map_err(CliError::internal)?;
+    if copied_profile_digest != expected_profile_digest {
+        return Err(CliError::operation(
+            "BETA_PROFILE_DIGEST_MISMATCH",
+            "copied profile differs from the embedded frozen profile",
+        ));
+    }
+    let provenance: BetaRunProvenanceV1 = read_json_path(&run_root.join("run-provenance.json"))?;
+    validate_recorded_provenance(&provenance).map_err(|error| {
+        CliError::operation(error.code, "recorded beta provenance validation failed")
+    })?;
+    let provenance_digest =
+        domain_separated_digest("hsai.local-beta-run-provenance.v1", &provenance)
+            .map_err(CliError::internal)?;
+    if provenance_digest != manifest.provenance_digest {
+        return Err(CliError::operation(
+            "BETA_PROVENANCE_DIGEST_MISMATCH",
+            "run provenance digest differs from the manifest binding",
+        ));
+    }
+    verify_beta_scenario_results(run_root, &manifest.scenario_results)?;
+    let [check] = manifest.operational_checks.as_slice() else {
+        return Err(CliError::operation(
+            "BETA_OPERATIONAL_CHECK_MISMATCH",
+            "beta manifest must contain exactly the frozen operational check",
+        ));
+    };
+    let expected_root = "operational-checks/sqlite-settlement-recovery";
+    if check.check != "sqlite-settlement-recovery"
+        || check.status != "PASS"
+        || check.report_file != format!("{expected_root}/local-recovery-report.json")
+        || check.database_file != format!("{expected_root}/settlement-recovery.sqlite3")
+    {
+        return Err(CliError::operation(
+            "BETA_OPERATIONAL_CHECK_MISMATCH",
+            "operational check identity, status, or artifact path differs from the frozen contract",
+        ));
+    }
+    if raw_file_digest(&run_root.join(&check.report_file))? != check.report_digest
+        || raw_file_digest(&run_root.join(&check.database_file))? != check.database_digest
+    {
+        return Err(CliError::operation(
+            "BETA_OPERATIONAL_CHECK_MISMATCH",
+            "operational check artifact digest differs from the manifest binding",
+        ));
+    }
+    let recovery_root = run_root.join(expected_root);
+    let report: LocalRecoveryReportV1 =
+        read_json_path(&recovery_root.join("local-recovery-report.json"))?;
+    beta_runtime()?
+        .block_on(verify_local_lost_receipt_recovery(&recovery_root, &report))
+        .map_err(|error| {
+            CliError::operation("BETA_OPERATIONAL_CHECK_FAILED", &error.to_string())
+        })?;
+    verify_exported_tamper_artifact(run_root)
+}
+
+#[allow(clippy::too_many_lines)]
+fn verify_beta_scenario_results(
+    run_root: &Path,
+    scenario_results: &[BetaScenarioResult],
+) -> Result<(), CliError> {
+    if scenario_results.len() != BETA_SCENARIOS.len() {
+        return Err(CliError::operation(
+            "BETA_SCENARIO_MATRIX_MISMATCH",
+            "manifest does not contain exactly the frozen scenario matrix",
+        ));
+    }
+    let mut verified_bundle_count = 0_usize;
+    for ((expected_name, scenario), result) in BETA_SCENARIOS.iter().zip(scenario_results) {
+        if result.scenario != *expected_name || result.status != "PASS" {
+            return Err(CliError::operation(
+                "BETA_SCENARIO_MATRIX_MISMATCH",
+                "manifest scenario order, identity, or status differs from the frozen matrix",
+            ));
+        }
+        let scenario_root = run_root.join(expected_name);
+        let report: ScenarioReport = read_json_path(&scenario_root.join("scenario-report.json"))?;
+        validate_scenario_report(expected_name, &report)?;
+        if result.truth != report.truth
+            || result.finality != report.finality
+            || result.execution_outcomes != report.execution_outcomes
+            || result.mock_effect_count != report.mock_effect_count
+            || result.reconciliation_status != report.reconciliation_status
+        {
+            return Err(CliError::operation(
+                "BETA_SCENARIO_MATRIX_MISMATCH",
+                "manifest scenario result differs from its validated report",
+            ));
+        }
+        let expected_bundle_names: &[&str] =
+            if *scenario == LocalScenario::DisputedFalseCounterexampleTrue {
+                &[
+                    "original-evidence-bundle.json",
+                    "replacement-evidence-bundle.json",
+                ]
+            } else {
+                &["evidence-bundle.json"]
+            };
+        if result.evidence_bundles.len() != expected_bundle_names.len() {
+            return Err(CliError::operation(
+                "BETA_SCENARIO_MATRIX_MISMATCH",
+                "manifest bundle count differs from the frozen matrix",
+            ));
+        }
+        for (bundle, expected_bundle_name) in
+            result.evidence_bundles.iter().zip(expected_bundle_names)
+        {
+            let expected_relative_path = format!("{expected_name}/{expected_bundle_name}");
+            if bundle.relative_path != expected_relative_path {
+                return Err(CliError::operation(
+                    "BETA_SCENARIO_MATRIX_MISMATCH",
+                    "manifest bundle path differs from the frozen matrix",
+                ));
+            }
+            let observed_digest =
+                verify_bundle_from_disk(&run_root.join(&bundle.relative_path), &scenario_root)?;
+            if observed_digest != bundle.bundle_digest {
+                return Err(CliError::operation(
+                    "BETA_SCENARIO_MATRIX_MISMATCH",
+                    "disk-verified bundle digest differs from the manifest binding",
+                ));
+            }
+            verified_bundle_count += 1;
+        }
+        if result
+            .evidence_bundles
+            .last()
+            .map(|bundle| bundle.bundle_digest)
+            != Some(report.evidence_bundle_digest)
+        {
+            return Err(CliError::operation(
+                "BETA_SCENARIO_MATRIX_MISMATCH",
+                "primary bundle digest differs from the scenario report binding",
+            ));
+        }
+    }
+    if verified_bundle_count != 8 {
+        return Err(CliError::operation(
+            "BETA_SCENARIO_MATRIX_MISMATCH",
+            "beta run must contain exactly eight verified evidence bundles",
+        ));
+    }
+    Ok(())
 }
 
 fn verify_exported_tamper_artifact(run_root: &Path) -> Result<(), CliError> {
@@ -1575,17 +1912,30 @@ mod tests {
         );
         let run_root = directory.path().join("beta-001");
         assert!(run_root.join("beta-run-manifest.json").is_file());
-        let copied_profile: LocalBetaProfile =
+        let copied_profile: LocalBetaProfileV2 =
             read_json_path(&run_root.join("local-beta-profile.json"))
                 .map_err(|error| std::io::Error::other(error.message))?;
         let copied_profile_digest =
-            domain_separated_digest("hsai.local-beta-profile.v1", &copied_profile)?;
+            domain_separated_digest("hsai.local-beta-profile.v2", &copied_profile)?;
         assert_eq!(
             output["profile_digest"],
             serde_json::to_value(copied_profile_digest)?
         );
         assert_eq!(output["profile_file"], "local-beta-profile.json");
-        assert_eq!(output["schema_version"], "hsai.local-beta-run-manifest.v2");
+        assert_eq!(output["schema_version"], "hsai.local-beta-run-manifest.v3");
+        assert_eq!(
+            output["operational_checks"].as_array().map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            output["operational_checks"][0]["check"],
+            "sqlite-settlement-recovery"
+        );
+        assert!(
+            run_root
+                .join("operational-checks/sqlite-settlement-recovery/settlement-recovery.sqlite3")
+                .is_file()
+        );
         assert_eq!(output["provenance_file"], "run-provenance.json");
         let provenance: BetaRunProvenanceV1 = read_json_path(&run_root.join("run-provenance.json"))
             .map_err(|error| std::io::Error::other(error.message))?;
@@ -1696,6 +2046,69 @@ mod tests {
     }
 
     #[test]
+    fn contract_beta_v2_legacy_profile_run_remains_verifiable()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let run_id = "legacy-v2-sealed";
+        beta_rehearsal_unsealed(directory.path(), run_id)
+            .map_err(|error| std::io::Error::other(error.message))?;
+        let run_root = directory.path().join(run_id);
+        fs::remove_dir_all(run_root.join("operational-checks"))?;
+        let legacy_profile: LocalBetaProfile = serde_json::from_str(LEGACY_LOCAL_BETA_PROFILE)?;
+        let legacy_profile_digest =
+            domain_separated_digest("hsai.local-beta-profile.v1", &legacy_profile)?;
+        fs::write(
+            run_root.join("local-beta-profile.json"),
+            LEGACY_LOCAL_BETA_PROFILE,
+        )?;
+        let mut manifest: Value =
+            serde_json::from_slice(&fs::read(run_root.join("beta-run-manifest.json"))?)?;
+        manifest["schema_version"] = json!("hsai.local-beta-run-manifest.v2");
+        manifest["profile_schema_version"] = json!(legacy_profile.schema_version);
+        manifest["profile_id"] = json!(legacy_profile.profile_id);
+        manifest["profile_digest"] = serde_json::to_value(legacy_profile_digest)?;
+        manifest["claim_ceiling"] = json!(legacy_profile.claim_ceiling);
+        manifest
+            .as_object_mut()
+            .ok_or("manifest must be an object")?
+            .remove("operational_checks");
+        fs::write(
+            run_root.join("beta-run-manifest.json"),
+            serde_json::to_vec_pretty(&manifest)?,
+        )?;
+        finalize_beta_run(directory.path(), run_id)
+            .map_err(|error| std::io::Error::other(error.message))?;
+        verify_beta_run(directory.path(), run_id)
+            .map_err(|error| std::io::Error::other(error.message))?;
+        Ok(())
+    }
+
+    #[test]
+    fn contract_beta_recovery_report_and_database_tamper_fail_closed()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for (run_id, relative_path) in [
+            (
+                "recovery-report-tamper",
+                "operational-checks/sqlite-settlement-recovery/local-recovery-report.json",
+            ),
+            (
+                "recovery-database-tamper",
+                "operational-checks/sqlite-settlement-recovery/settlement-recovery.sqlite3",
+            ),
+        ] {
+            let directory = tempfile::tempdir()?;
+            beta_rehearsal(directory.path(), run_id)
+                .map_err(|error| std::io::Error::other(error.message))?;
+            let path = directory.path().join(run_id).join(relative_path);
+            let mut bytes = fs::read(&path)?;
+            bytes.push(b'!');
+            fs::write(path, bytes)?;
+            assert!(verify_beta_run(directory.path(), run_id).is_err());
+        }
+        Ok(())
+    }
+
+    #[test]
     fn contract_beta_verify_rejects_post_seal_addition_mutation_and_deletion()
     -> Result<(), Box<dyn std::error::Error>> {
         for (run_id, change) in [
@@ -1752,21 +2165,21 @@ mod tests {
     #[test]
     fn contract_beta_profile_rejects_live_writes_and_scenario_drift()
     -> Result<(), Box<dyn std::error::Error>> {
-        let mut profile: LocalBetaProfile = serde_json::from_str(LOCAL_BETA_PROFILE)?;
+        let mut profile: LocalBetaProfileV2 = serde_json::from_str(LOCAL_BETA_PROFILE)?;
         profile.profile_id = "unapproved-local-profile".to_owned();
-        let identity_error = validate_beta_profile(&profile)
+        let identity_error = validate_beta_profile_v2(&profile)
             .err()
             .ok_or("profile ID drift must fail")?;
         assert_eq!(identity_error.code, "UNSAFE_LOCAL_BETA_PROFILE");
-        profile.profile_id = "hermetic-trusted-operator-v1".to_owned();
+        profile.profile_id = "hermetic-trusted-operator-v2".to_owned();
         profile.live_writes = true;
-        let live_error = validate_beta_profile(&profile)
+        let live_error = validate_beta_profile_v2(&profile)
             .err()
             .ok_or("live writes must fail")?;
         assert_eq!(live_error.code, "UNSAFE_LOCAL_BETA_PROFILE");
         profile.live_writes = false;
         profile.scenarios.swap(0, 1);
-        let drift_error = validate_beta_profile(&profile)
+        let drift_error = validate_beta_profile_v2(&profile)
             .err()
             .ok_or("scenario drift must fail")?;
         assert_eq!(drift_error.code, "UNSAFE_LOCAL_BETA_PROFILE");

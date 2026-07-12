@@ -4,11 +4,13 @@ use std::{path::Path, str::FromStr, time::Duration};
 
 use outcomes_domain::{
     CanonicalizationError, ClaimSpecError, ClaimSpecV1, DisputeDecisionKind,
-    DisputeDecisionRecordV1, DisputeRecordV1, MutationContext, ReconciliationResultV1,
-    ReconciliationStatus, ResolutionRecordV1, ResolutionSupersessionRecordV1, SettlementLifecycle,
-    Sha256Digest, StateSlice, SubmissionReceiptV1, UndeclaredMutation, UnsignedSettlementIntentV1,
-    UtcTimestamp, canonical_json, domain_separated_digest, submission_receipt_digest,
+    DisputeDecisionRecordV1, DisputeRecordV1, MarketBindingV1, MutationContext,
+    OutcomeEvidenceBundleV1, ReconciliationResultV1, ReconciliationStatus, ResolutionRecordV1,
+    ResolutionSupersessionRecordV1, SettlementLifecycle, Sha256Digest, StateSlice,
+    SubmissionReceiptV1, UndeclaredMutation, UnsignedSettlementIntentV1, UtcTimestamp,
+    canonical_json, domain_separated_digest, submission_receipt_digest,
 };
+use serde::Serialize;
 use serde_json::json;
 use sqlx::{
     Row, Sqlite, SqlitePool, Transaction,
@@ -62,6 +64,23 @@ pub struct SettlementRecoveryState {
     pub latest_reconciliation: Option<ReconciliationResultV1>,
     /// Fail-closed restart action; missing receipt never means blind resubmission.
     pub action: SettlementRecoveryAction,
+}
+
+/// Exact durable record cardinality and identities for one settlement recovery.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SettlementRecoveryIntegrityV1 {
+    /// Fully decoded restart state.
+    pub recovery: SettlementRecoveryState,
+    /// Matching durable intent rows; exactly one for a valid recovery.
+    pub intent_count: u64,
+    /// Matching durable receipt rows; zero before recovery and one afterwards.
+    pub receipt_count: u64,
+    /// Matching append-only reconciliation rows.
+    pub reconciliation_count: u64,
+    /// Canonical durable receipt identity, when present.
+    pub receipt_digest: Option<Sha256Digest>,
+    /// Canonical identity of the latest reconciliation, when present.
+    pub latest_reconciliation_digest: Option<Sha256Digest>,
 }
 
 /// Durable append-only dispute state loaded after process restart.
@@ -141,6 +160,9 @@ pub enum PersistenceError {
         /// Exact conflict class.
         reason: &'static str,
     },
+    /// Settlement prerequisites do not form one exact claim/evidence/resolution/binding chain.
+    #[error("settlement prerequisite identity conflict: {0}")]
+    SettlementPrerequisiteConflict(&'static str),
 }
 
 /// `SQLite` development implementation of immutable claim persistence.
@@ -183,6 +205,42 @@ impl SqliteStore {
             .connect_with(options)
             .await?;
         Ok(Self { pool })
+    }
+
+    /// Open an existing `SQLite` artifact without migrations or filesystem writes.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error when the immutable read-only artifact cannot be opened.
+    pub async fn connect_read_only(path: &Path) -> Result<Self, PersistenceError> {
+        let options = SqliteConnectOptions::new()
+            .filename(path)
+            .foreign_keys(true)
+            .read_only(true)
+            .immutable(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await?;
+        Ok(Self { pool })
+    }
+
+    /// Close every pooled connection and wait for `SQLite` to release the file.
+    pub async fn close(self) {
+        self.pool.close().await;
+    }
+
+    /// Checkpoint and truncate the WAL before closing a retained `SQLite` artifact.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error when the WAL checkpoint cannot complete.
+    pub async fn checkpoint_and_close(self) -> Result<(), PersistenceError> {
+        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+            .execute(&self.pool)
+            .await?;
+        self.pool.close().await;
+        Ok(())
     }
 
     /// Apply the immutable v1 `SQLite` schema once and verify its checksum later.
@@ -318,6 +376,147 @@ impl SqliteStore {
             Ok(claim)
         })
         .transpose()
+    }
+
+    /// Atomically persist the exact evidence, final resolution, and market binding needed by settlement.
+    ///
+    /// The claim must already be frozen. Required declared slices are `EvidenceStoreV1`,
+    /// `ResolutionLedgerV1`, `MarketBindingV1`, `OperationsV1`, and `DeliveryV1`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a scope, identity, binding, conflict, audit, outbox, or database error.
+    #[allow(clippy::too_many_lines)]
+    pub async fn persist_settlement_prerequisites(
+        &self,
+        context: &MutationContext,
+        claim: &ClaimSpecV1,
+        evidence_bundle: &OutcomeEvidenceBundleV1,
+        final_resolution: &ResolutionRecordV1,
+        binding: &MarketBindingV1,
+        created_at: &UtcTimestamp,
+    ) -> Result<AppendOutcome, PersistenceError> {
+        require_settlement_prerequisite_scope(context)?;
+        validate_settlement_prerequisites(claim, evidence_bundle, final_resolution, binding)?;
+        let evidence_json = serde_json::to_string(evidence_bundle)?;
+        let resolution_json = serde_json::to_string(final_resolution)?;
+        let binding_json = serde_json::to_string(binding)?;
+        let mut transaction = self.pool.begin().await?;
+        let frozen: Option<String> =
+            sqlx::query_scalar("SELECT payload_json FROM claim_specs WHERE claim_id = ?")
+                .bind(claim.claim_id.to_string())
+                .fetch_optional(&mut *transaction)
+                .await?;
+        if frozen.as_deref() != Some(serde_json::to_string(claim)?.as_str()) {
+            return Err(PersistenceError::SettlementPrerequisiteConflict(
+                "frozen claim is missing or differs from supplied claim",
+            ));
+        }
+        let evidence_inserted = sqlx::query(
+            "INSERT OR IGNORE INTO evidence_manifests(evidence_digest, claim_id, payload_json, created_at) VALUES(?, ?, ?, ?)",
+        )
+        .bind(evidence_bundle.bundle_digest.to_string())
+        .bind(claim.claim_id.to_string())
+        .bind(&evidence_json)
+        .bind(created_at.to_string())
+        .execute(&mut *transaction)
+        .await?
+        .rows_affected() == 1;
+        let resolution_inserted = sqlx::query(
+            "INSERT OR IGNORE INTO resolution_records(resolution_digest, claim_id, truth_value, finality, evidence_digest, payload_json, created_at) VALUES(?, ?, 'TRUE', 'FINAL', ?, ?, ?)",
+        )
+        .bind(final_resolution.record_digest.to_string())
+        .bind(claim.claim_id.to_string())
+        .bind(evidence_bundle.bundle_digest.to_string())
+        .bind(&resolution_json)
+        .bind(created_at.to_string())
+        .execute(&mut *transaction)
+        .await?
+        .rows_affected() == 1;
+        let true_side = binding
+            .sides
+            .iter()
+            .find(|side| side.side_index == binding.true_side_index)
+            .ok_or(PersistenceError::SettlementPrerequisiteConflict(
+                "true side is missing",
+            ))?;
+        let false_side = binding
+            .sides
+            .iter()
+            .find(|side| side.side_index == binding.false_side_index)
+            .ok_or(PersistenceError::SettlementPrerequisiteConflict(
+                "false side is missing",
+            ))?;
+        let binding_inserted = sqlx::query(
+            "INSERT OR IGNORE INTO market_bindings(binding_digest, claim_id, backend, network, external_market_id, true_side_id, false_side_id, metadata_digest, payload_json, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(binding.binding_digest.to_string())
+        .bind(claim.claim_id.to_string())
+        .bind(&binding.backend)
+        .bind(enum_json_label(&binding.network)?)
+        .bind(&binding.external_market_id)
+        .bind(&true_side.side_id)
+        .bind(&false_side.side_id)
+        .bind(binding.external_metadata_digest.to_string())
+        .bind(&binding_json)
+        .bind(created_at.to_string())
+        .execute(&mut *transaction)
+        .await?
+        .rows_affected() == 1;
+        if !(evidence_inserted && resolution_inserted && binding_inserted) {
+            let existing_evidence: Option<String> = sqlx::query_scalar(
+                "SELECT payload_json FROM evidence_manifests WHERE evidence_digest = ?",
+            )
+            .bind(evidence_bundle.bundle_digest.to_string())
+            .fetch_optional(&mut *transaction)
+            .await?;
+            let existing_resolution: Option<String> = sqlx::query_scalar(
+                "SELECT payload_json FROM resolution_records WHERE resolution_digest = ?",
+            )
+            .bind(final_resolution.record_digest.to_string())
+            .fetch_optional(&mut *transaction)
+            .await?;
+            let existing_binding: Option<String> = sqlx::query_scalar(
+                "SELECT payload_json FROM market_bindings WHERE binding_digest = ?",
+            )
+            .bind(binding.binding_digest.to_string())
+            .fetch_optional(&mut *transaction)
+            .await?;
+            if existing_evidence.as_deref() == Some(&evidence_json)
+                && existing_resolution.as_deref() == Some(&resolution_json)
+                && existing_binding.as_deref() == Some(&binding_json)
+                && !evidence_inserted
+                && !resolution_inserted
+                && !binding_inserted
+            {
+                transaction.commit().await?;
+                return Ok(AppendOutcome::ExistingIdentical);
+            }
+            return Err(PersistenceError::SettlementPrerequisiteConflict(
+                "partial replay or immutable prerequisite identity conflict",
+            ));
+        }
+        let payload = json!({
+            "claim_id": claim.claim_id,
+            "evidence_bundle_digest": evidence_bundle.bundle_digest,
+            "final_resolution_digest": final_resolution.record_digest,
+            "binding_digest": binding.binding_digest,
+        });
+        let payload_json = serde_json::to_string(&payload)?;
+        let payload_digest = domain_separated_digest("hsai.settlement-prerequisites.v1", &payload)?;
+        append_protocol_records(
+            &mut transaction,
+            context,
+            "SETTLEMENT_PREREQUISITES_PERSISTED",
+            "SETTLEMENT_PREREQUISITES",
+            &claim.claim_id.to_string(),
+            payload_digest,
+            &payload_json,
+            created_at,
+        )
+        .await?;
+        transaction.commit().await?;
+        Ok(AppendOutcome::Inserted)
     }
 
     /// Append one immutable open dispute with audit and outbox records.
@@ -958,6 +1157,62 @@ impl SqliteStore {
             action,
         }))
     }
+
+    /// Read exact durable recovery cardinalities and canonical record identities.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database, JSON, or canonical identity error.
+    pub async fn settlement_recovery_integrity(
+        &self,
+        intent_id: &str,
+    ) -> Result<Option<SettlementRecoveryIntegrityV1>, PersistenceError> {
+        let Some(recovery) = self.settlement_recovery_state(intent_id).await? else {
+            return Ok(None);
+        };
+        let intent_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM settlement_intents WHERE intent_id = ?")
+                .bind(intent_id)
+                .fetch_one(&self.pool)
+                .await?;
+        let receipt_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM settlement_receipts WHERE intent_id = ?")
+                .bind(intent_id)
+                .fetch_one(&self.pool)
+                .await?;
+        let reconciliation_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM settlement_reconciliations WHERE intent_id = ?",
+        )
+        .bind(intent_id)
+        .fetch_one(&self.pool)
+        .await?;
+        let receipt_digest = recovery
+            .receipt
+            .as_ref()
+            .map(submission_receipt_digest)
+            .transpose()?;
+        let latest_reconciliation_digest = recovery
+            .latest_reconciliation
+            .as_ref()
+            .map(|value| {
+                domain_separated_digest("hsai.persisted-settlement-reconciliation.v1", value)
+            })
+            .transpose()?;
+        Ok(Some(SettlementRecoveryIntegrityV1 {
+            recovery,
+            intent_count: u64::try_from(intent_count).map_err(|_| {
+                PersistenceError::SettlementPrerequisiteConflict("negative intent count")
+            })?,
+            receipt_count: u64::try_from(receipt_count).map_err(|_| {
+                PersistenceError::SettlementPrerequisiteConflict("negative receipt count")
+            })?,
+            reconciliation_count: u64::try_from(reconciliation_count).map_err(|_| {
+                PersistenceError::SettlementPrerequisiteConflict("negative reconciliation count")
+            })?,
+            receipt_digest,
+            latest_reconciliation_digest,
+        }))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1021,6 +1276,151 @@ fn require_settlement_scope(context: &MutationContext) -> Result<(), Persistence
         StateSlice::DeliveryV1,
     ] {
         context.scope.require(slice)?;
+    }
+    Ok(())
+}
+
+fn require_settlement_prerequisite_scope(
+    context: &MutationContext,
+) -> Result<(), PersistenceError> {
+    for slice in [
+        StateSlice::EvidenceStoreV1,
+        StateSlice::ResolutionLedgerV1,
+        StateSlice::MarketBindingV1,
+        StateSlice::OperationsV1,
+        StateSlice::DeliveryV1,
+    ] {
+        context.scope.require(slice)?;
+    }
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct PersistedBundleIdentity<'a> {
+    schema_version: &'static str,
+    claim_id: &'a outcomes_domain::ClaimId,
+    claim_spec_digest: Sha256Digest,
+    challenge_descriptor_digest: Sha256Digest,
+    observation_snapshot_digests: &'a [Sha256Digest],
+    completeness_assessment_digest: Sha256Digest,
+    qualifying_candidate_digests: &'a [Sha256Digest],
+    admission_decision_digests: &'a [Sha256Digest],
+    execution_manifest_digests: &'a [Sha256Digest],
+    resolution_aggregation_digest: Sha256Digest,
+    dispute_record_digests: &'a [Sha256Digest],
+    code_build_provenance_digest: Sha256Digest,
+    evidence_publication_policy_digest: Sha256Digest,
+    blobs: &'a [outcomes_domain::ContentBlobRefV1],
+}
+
+#[derive(Serialize)]
+struct PersistedResolutionIdentity<'a> {
+    schema_version: &'static str,
+    claim_id: &'a outcomes_domain::ClaimId,
+    truth: outcomes_domain::ClaimTruth,
+    finality: outcomes_domain::ResolutionFinality,
+    evidence_bundle_digest: Sha256Digest,
+    attestation_digests: &'a [Sha256Digest],
+    dispute_window_start: &'a UtcTimestamp,
+    dispute_window_end: &'a UtcTimestamp,
+}
+
+fn validate_settlement_prerequisites(
+    claim: &ClaimSpecV1,
+    evidence: &OutcomeEvidenceBundleV1,
+    resolution: &ResolutionRecordV1,
+    binding: &MarketBindingV1,
+) -> Result<(), PersistenceError> {
+    claim.verify_identity()?;
+    let claim_digest = claim.claim_spec_digest()?;
+    if evidence.schema_version != "hsai.outcome-evidence-bundle.v1"
+        || evidence.claim_id != claim.claim_id
+        || evidence.claim_spec_digest != claim_digest
+        || evidence.challenge_descriptor_digest != claim.challenge_descriptor_digest
+    {
+        return Err(PersistenceError::SettlementPrerequisiteConflict(
+            "evidence does not bind frozen claim",
+        ));
+    }
+    let evidence_digest = domain_separated_digest(
+        "hsai.outcome-evidence-bundle.v1",
+        &PersistedBundleIdentity {
+            schema_version: "hsai.outcome-evidence-bundle.v1",
+            claim_id: &evidence.claim_id,
+            claim_spec_digest: evidence.claim_spec_digest,
+            challenge_descriptor_digest: evidence.challenge_descriptor_digest,
+            observation_snapshot_digests: &evidence.observation_snapshot_digests,
+            completeness_assessment_digest: evidence.completeness_assessment_digest,
+            qualifying_candidate_digests: &evidence.qualifying_candidate_digests,
+            admission_decision_digests: &evidence.admission_decision_digests,
+            execution_manifest_digests: &evidence.execution_manifest_digests,
+            resolution_aggregation_digest: evidence.resolution_aggregation_digest,
+            dispute_record_digests: &evidence.dispute_record_digests,
+            code_build_provenance_digest: evidence.code_build_provenance_digest,
+            evidence_publication_policy_digest: evidence.evidence_publication_policy_digest,
+            blobs: &evidence.blobs,
+        },
+    )?;
+    if evidence_digest != evidence.bundle_digest {
+        return Err(PersistenceError::SettlementPrerequisiteConflict(
+            "evidence bundle digest mismatch",
+        ));
+    }
+    if resolution.schema_version != "hsai.resolution-record.v1"
+        || resolution.claim_id != claim.claim_id
+        || resolution.truth != outcomes_domain::ClaimTruth::True
+        || resolution.finality != outcomes_domain::ResolutionFinality::Final
+        || resolution.evidence_bundle_digest != evidence.bundle_digest
+    {
+        return Err(PersistenceError::SettlementPrerequisiteConflict(
+            "resolution is not exact FINAL TRUE evidence binding",
+        ));
+    }
+    let resolution_digest = domain_separated_digest(
+        "hsai.resolution-record.v1",
+        &PersistedResolutionIdentity {
+            schema_version: "hsai.resolution-record.v1",
+            claim_id: &resolution.claim_id,
+            truth: resolution.truth,
+            finality: resolution.finality,
+            evidence_bundle_digest: resolution.evidence_bundle_digest,
+            attestation_digests: &resolution.attestation_digests,
+            dispute_window_start: &resolution.dispute_window_start,
+            dispute_window_end: &resolution.dispute_window_end,
+        },
+    )?;
+    if resolution_digest != resolution.record_digest
+        || resolution.resolution_id != format!("resolution_{}", &resolution_digest.to_hex()[..32])
+    {
+        return Err(PersistenceError::SettlementPrerequisiteConflict(
+            "resolution digest mismatch",
+        ));
+    }
+    let binding_digest = domain_separated_digest(
+        "hsai.market-binding.v1",
+        &(
+            &binding.backend,
+            binding.network,
+            &binding.external_market_id,
+            &binding.external_question_id,
+            binding.external_metadata_digest,
+            &binding.claim_id,
+            binding.claim_spec_digest,
+            binding.true_side_index,
+            binding.false_side_index,
+            binding.capability_snapshot_digest,
+        ),
+    )?;
+    if binding.schema_version != "hsai.market-binding.v1"
+        || binding.claim_id != claim.claim_id
+        || binding.claim_spec_digest != claim_digest
+        || binding.binding_digest != binding_digest
+        || binding.true_side_index == binding.false_side_index
+        || binding.invalidation_reason.is_some()
+    {
+        return Err(PersistenceError::SettlementPrerequisiteConflict(
+            "market binding identity mismatch",
+        ));
     }
     Ok(())
 }
@@ -1483,6 +1883,148 @@ mod tests {
                 StateSlice::DeliveryV1,
             ]),
         }
+    }
+
+    fn prerequisite_context(request_id: &str) -> MutationContext {
+        MutationContext {
+            actor_id: "beta-local".to_owned(),
+            request_id: request_id.to_owned(),
+            scope: MutationScope::new([
+                StateSlice::EvidenceStoreV1,
+                StateSlice::ResolutionLedgerV1,
+                StateSlice::MarketBindingV1,
+                StateSlice::OperationsV1,
+                StateSlice::DeliveryV1,
+            ]),
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn valid_prerequisites(
+        claim: &ClaimSpecV1,
+    ) -> Result<
+        (OutcomeEvidenceBundleV1, ResolutionRecordV1, MarketBindingV1),
+        Box<dyn std::error::Error>,
+    > {
+        let mut evidence = OutcomeEvidenceBundleV1 {
+            schema_version: "hsai.outcome-evidence-bundle.v1".to_owned(),
+            claim_id: claim.claim_id.clone(),
+            claim_spec_digest: claim.claim_spec_digest()?,
+            challenge_descriptor_digest: claim.challenge_descriptor_digest,
+            observation_snapshot_digests: vec![digest("snapshot")?],
+            completeness_assessment_digest: digest("complete")?,
+            qualifying_candidate_digests: vec![digest("candidate")?],
+            admission_decision_digests: vec![digest("admission")?],
+            execution_manifest_digests: vec![digest("run-1")?, digest("run-2")?],
+            resolution_aggregation_digest: digest("aggregation")?,
+            dispute_record_digests: Vec::new(),
+            code_build_provenance_digest: digest("build")?,
+            evidence_publication_policy_digest: digest("publication")?,
+            blobs: Vec::new(),
+            bundle_digest: digest("placeholder")?,
+        };
+        evidence.bundle_digest = domain_separated_digest(
+            "hsai.outcome-evidence-bundle.v1",
+            &PersistedBundleIdentity {
+                schema_version: "hsai.outcome-evidence-bundle.v1",
+                claim_id: &evidence.claim_id,
+                claim_spec_digest: evidence.claim_spec_digest,
+                challenge_descriptor_digest: evidence.challenge_descriptor_digest,
+                observation_snapshot_digests: &evidence.observation_snapshot_digests,
+                completeness_assessment_digest: evidence.completeness_assessment_digest,
+                qualifying_candidate_digests: &evidence.qualifying_candidate_digests,
+                admission_decision_digests: &evidence.admission_decision_digests,
+                execution_manifest_digests: &evidence.execution_manifest_digests,
+                resolution_aggregation_digest: evidence.resolution_aggregation_digest,
+                dispute_record_digests: &evidence.dispute_record_digests,
+                code_build_provenance_digest: evidence.code_build_provenance_digest,
+                evidence_publication_policy_digest: evidence.evidence_publication_policy_digest,
+                blobs: &evidence.blobs,
+            },
+        )?;
+        let start = timestamp("2026-07-10T10:00:00Z")?;
+        let end = timestamp("2026-07-10T10:10:00Z")?;
+        let attestations = vec![digest("attestation")?];
+        let resolution_digest = domain_separated_digest(
+            "hsai.resolution-record.v1",
+            &PersistedResolutionIdentity {
+                schema_version: "hsai.resolution-record.v1",
+                claim_id: &claim.claim_id,
+                truth: ClaimTruth::True,
+                finality: ResolutionFinality::Final,
+                evidence_bundle_digest: evidence.bundle_digest,
+                attestation_digests: &attestations,
+                dispute_window_start: &start,
+                dispute_window_end: &end,
+            },
+        )?;
+        let resolution = ResolutionRecordV1 {
+            schema_version: "hsai.resolution-record.v1".to_owned(),
+            resolution_id: format!("resolution_{}", &resolution_digest.to_hex()[..32]),
+            claim_id: claim.claim_id.clone(),
+            truth: ClaimTruth::True,
+            finality: ResolutionFinality::Final,
+            evidence_bundle_digest: evidence.bundle_digest,
+            attestation_digests: attestations,
+            dispute_window_start: start,
+            dispute_window_end: end,
+            record_digest: resolution_digest,
+        };
+        let metadata = digest("metadata")?;
+        let capability = digest("capability")?;
+        let binding_digest = domain_separated_digest(
+            "hsai.market-binding.v1",
+            &(
+                "mock-hip4",
+                SettlementNetwork::Mock,
+                "outcome-42",
+                &Option::<String>::None,
+                metadata,
+                &claim.claim_id,
+                claim.claim_spec_digest()?,
+                0_u8,
+                1_u8,
+                capability,
+            ),
+        )?;
+        let binding = MarketBindingV1 {
+            schema_version: "hsai.market-binding.v1".to_owned(),
+            backend: "mock-hip4".to_owned(),
+            network: SettlementNetwork::Mock,
+            external_market_id: "outcome-42".to_owned(),
+            external_question_id: None,
+            sides: vec![
+                ExternalSideV1 {
+                    side_index: 0,
+                    side_id: "side-0".to_owned(),
+                    display_name: "TRUE".to_owned(),
+                },
+                ExternalSideV1 {
+                    side_index: 1,
+                    side_id: "side-1".to_owned(),
+                    display_name: "FALSE".to_owned(),
+                },
+            ],
+            true_side_index: 0,
+            false_side_index: 1,
+            true_settlement_fraction: "1".to_owned(),
+            false_settlement_fraction: "0".to_owned(),
+            quote_token: None,
+            external_metadata_digest: metadata,
+            raw_payload_digest: digest("raw")?,
+            claim_id: claim.claim_id.clone(),
+            claim_spec_digest: claim.claim_spec_digest()?,
+            external_claim_commitment: None,
+            expected_settlement_authority: Some("mock".to_owned()),
+            capability_snapshot_digest: capability,
+            capability_version: "hsai.backend-capability.v1".to_owned(),
+            created_by: "test".to_owned(),
+            created_at: timestamp("2026-07-10T10:00:00Z")?,
+            binding_signature: "mock-signature".to_owned(),
+            binding_digest,
+            invalidation_reason: None,
+        };
+        Ok((evidence, resolution, binding))
     }
 
     fn dispute_context(request_id: &str, include_resolution: bool) -> MutationContext {
@@ -2338,6 +2880,143 @@ mod tests {
         assert_eq!(settlement_record_counts(&complete_store).await?, (1, 1, 1));
         assert_eq!(backend.submission_call_count(), 1);
         assert_eq!(backend.effect_count(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn settlement_prerequisites_are_atomic_scoped_and_idempotent()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let store = SqliteStore::in_memory().await?;
+        store.migrate().await?;
+        let claim = local_demo_claim_draft()?.freeze()?;
+        store
+            .freeze_claim(
+                &freeze_context("prereq-freeze"),
+                &claim,
+                &timestamp("2026-07-10T09:00:00Z")?,
+                "test",
+            )
+            .await?;
+        let (evidence, resolution, binding) = valid_prerequisites(&claim)?;
+        let insufficient = MutationContext {
+            actor_id: "beta-local".to_owned(),
+            request_id: "prereq-bad-scope".to_owned(),
+            scope: MutationScope::new([StateSlice::EvidenceStoreV1]),
+        };
+        assert!(matches!(
+            store
+                .persist_settlement_prerequisites(
+                    &insufficient,
+                    &claim,
+                    &evidence,
+                    &resolution,
+                    &binding,
+                    &timestamp("2026-07-10T10:00:00Z")?
+                )
+                .await,
+            Err(PersistenceError::UndeclaredMutation(_))
+        ));
+        assert_eq!(
+            store
+                .persist_settlement_prerequisites(
+                    &prerequisite_context("prereq-1"),
+                    &claim,
+                    &evidence,
+                    &resolution,
+                    &binding,
+                    &timestamp("2026-07-10T10:00:00Z")?
+                )
+                .await?,
+            AppendOutcome::Inserted
+        );
+        assert_eq!(
+            store
+                .persist_settlement_prerequisites(
+                    &prerequisite_context("prereq-replay"),
+                    &claim,
+                    &evidence,
+                    &resolution,
+                    &binding,
+                    &timestamp("2026-07-10T10:00:00Z")?
+                )
+                .await?,
+            AppendOutcome::ExistingIdentical
+        );
+        let mut conflicting = binding.clone();
+        conflicting.binding_signature = "different".to_owned();
+        assert!(matches!(
+            store
+                .persist_settlement_prerequisites(
+                    &prerequisite_context("prereq-conflict"),
+                    &claim,
+                    &evidence,
+                    &resolution,
+                    &conflicting,
+                    &timestamp("2026-07-10T10:00:00Z")?
+                )
+                .await,
+            Err(PersistenceError::SettlementPrerequisiteConflict(_))
+        ));
+        let counts: (i64, i64, i64) = (
+            sqlx::query_scalar("SELECT COUNT(*) FROM evidence_manifests")
+                .fetch_one(&store.pool)
+                .await?,
+            sqlx::query_scalar("SELECT COUNT(*) FROM resolution_records")
+                .fetch_one(&store.pool)
+                .await?,
+            sqlx::query_scalar("SELECT COUNT(*) FROM market_bindings")
+                .fetch_one(&store.pool)
+                .await?,
+        );
+        assert_eq!(counts, (1, 1, 1));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn copied_database_opens_immutable_and_integrity_is_read_only()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("recovery.sqlite");
+        let store = SqliteStore::connect_path(&path, 1).await?;
+        store.migrate().await?;
+        let (binding_digest, resolution_digest) = seed_settlement_dependencies(&store).await?;
+        let intent = settlement_intent(binding_digest, resolution_digest)?;
+        let request_digest = domain_separated_digest("hsai.mock-hip4-request.v1", &intent)?;
+        store
+            .persist_settlement_intent(
+                &settlement_context("readonly-intent"),
+                &intent,
+                request_digest,
+                &timestamp("2026-07-10T10:05:00Z")?,
+            )
+            .await?;
+        store.checkpoint_and_close().await?;
+        let readonly = SqliteStore::connect_read_only(&path).await?;
+        let integrity = readonly
+            .settlement_recovery_integrity(&intent.intent_id)
+            .await?
+            .ok_or("missing integrity")?;
+        assert_eq!(
+            (
+                integrity.intent_count,
+                integrity.receipt_count,
+                integrity.reconciliation_count
+            ),
+            (1, 0, 0)
+        );
+        assert_eq!(
+            integrity.recovery.action,
+            SettlementRecoveryAction::QueryExternalStatus
+        );
+        assert!(
+            sqlx::query("DELETE FROM settlement_intents")
+                .execute(&readonly.pool)
+                .await
+                .is_err()
+        );
+        readonly.close().await;
+        assert!(!path.with_extension("sqlite-wal").exists());
+        assert!(!path.with_extension("sqlite-shm").exists());
         Ok(())
     }
 

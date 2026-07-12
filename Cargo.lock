@@ -1383,6 +1383,7 @@ dependencies = [
  "outcomes-corpus",
  "outcomes-domain",
  "outcomes-evidence",
+ "outcomes-persistence-sqlx",
  "outcomes-resolution",
  "outcomes-runner",
  "outcomes-settlement",
@@ -1391,6 +1392,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]
@@ -1420,6 +1422,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]

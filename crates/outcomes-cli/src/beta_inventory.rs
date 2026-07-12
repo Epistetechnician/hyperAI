@@ -197,9 +197,18 @@ fn validate_run_prerequisites(
     let profile_path = run_root.join(PROFILE_FILE);
     require_regular_file(&profile_path, "BETA_PROFILE_MISSING")?;
     let profile: Value = read_json(&profile_path, "BETA_PROFILE_INVALID")?;
-    let observed_profile_digest =
-        domain_separated_digest("hsai.local-beta-profile.v1", &profile)
-            .map_err(|error| InventoryError::new("BETA_PROFILE_INVALID", error.to_string()))?;
+    let profile_domain = match profile.get("schema_version").and_then(Value::as_str) {
+        Some("hsai.local-beta-profile.v1") => "hsai.local-beta-profile.v1",
+        Some("hsai.local-beta-profile.v2") => "hsai.local-beta-profile.v2",
+        _ => {
+            return Err(InventoryError::new(
+                "BETA_PROFILE_INVALID",
+                "profile schema is not supported by the sealed inventory contract",
+            ));
+        }
+    };
+    let observed_profile_digest = domain_separated_digest(profile_domain, &profile)
+        .map_err(|error| InventoryError::new("BETA_PROFILE_INVALID", error.to_string()))?;
     let manifest_profile_digest: Sha256Digest =
         serde_json::from_value(manifest.get("profile_digest").cloned().ok_or_else(|| {
             InventoryError::new("BETA_MANIFEST_INVALID", "profile digest missing")

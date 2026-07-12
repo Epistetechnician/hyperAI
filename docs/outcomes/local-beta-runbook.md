@@ -3,8 +3,8 @@
 ## Boundary
 
 This beta is restricted to the immutable
-`hermetic-trusted-operator-v1` profile in
-`config/local-beta-profile.json`: one trusted operator, one local host, serial
+`hermetic-trusted-operator-v2` profile in
+`config/local-beta-profile-v2.json`: one trusted operator, one local host, serial
 execution, recorded fixtures, public artifacts, and the in-memory mock HIP-4
 backend. Live writes are forbidden. Testnet and mainnet are outside this beta.
 The profile does not authorize arbitrary unreviewed validators, hosted users,
@@ -18,8 +18,8 @@ before the first scenario starts:
 1. The checked-out commit is recorded and `git status --short` is empty.
 2. The pinned Rust toolchain and pnpm version are installed.
 3. The profile has `network: MOCK`, `backend: mock-hip4`,
-   `live_writes: false`, `serial_concurrency: 1`, and exactly the seven approved
-   scenarios.
+   `live_writes: false`, `serial_concurrency: 1`, exactly the seven approved
+   scenarios, and the `sqlite-settlement-recovery` operational check.
 4. No private key, signing material, credential, token, or populated `.env`
    file is present in the run directory, command line, captured environment, or
    logs.
@@ -49,7 +49,10 @@ pnpm run beta:verify --run-id "${RUN_ID}"
 The rehearsal itself requires a clean source tree, records bounded Git/tool and
 allowlisted-input provenance, enforces and copies the embedded profile, executes
 the matrix serially, reloads all eight bundles, verifies both dispute views,
-performs the required exported-file tamper rejection, and writes manifest v2.
+performs the required exported-file tamper rejection, exercises lost-receipt
+recovery across a file-backed SQLite application restart, and writes manifest
+v3. The recovery verifier reopens the retained database read-only and rejects
+SQLite WAL or shared-memory sidecars.
 It then creates and immediately verifies `beta-artifact-inventory.json`. PASS is
 not returned for an unsealed run. `beta:finalize` exists only to recover an
 interrupted run that wrote a complete PASS manifest before inventory creation.
@@ -78,6 +81,11 @@ the beta claim ceiling.
 
 Every listed evidence bundle must pass standalone verification. Any mismatch is
 a failed run, not an exception to approve during execution.
+
+The operational recovery check must first choose `QueryExternalStatus` with one
+intent and no receipt or reconciliation, then choose `Complete` after recovery
+with one intent, one receipt, and one reconciliation. Exactly one mock submit
+call and one external effect are permitted; recovery must not resubmit.
 
 ## Stop and quarantine
 
@@ -149,11 +157,14 @@ final disposition. Permitted dispositions are `PASS`, `QUARANTINED`, and
 
 Runs `beta-001` and `beta-002` predate manifest v2 provenance and automatic
 inventory sealing. They remain useful rehearsal evidence but are legacy,
-unsealed runs and cannot be upgraded or rewritten in place. Start a fresh
-`beta-003` or later run for the sealed beta contract.
+unsealed runs and cannot be upgraded or rewritten in place. `beta-003` is a
+sealed manifest-v2 run and remains verifiable, but predates the SQLite recovery
+check. Use a fresh manifest-v3 run for the current beta contract.
 
 The only permitted claim is: controlled, trusted-operator, single-host local
-beta of a hermetic verifiable-outcome protocol with offline-verifiable evidence
-and idempotent in-memory mock settlement. It makes no live market creation or
-settlement, production sandbox, production IAM, HA/DR, live-source completeness,
-cross-host determinism, or exactly-once external delivery claim.
+beta of a hermetic verifiable-outcome protocol with offline-verifiable evidence,
+idempotent in-memory mock settlement, and file-backed SQLite recovery across an
+application restart while the mock authority is retained. It makes no live
+market creation or settlement, backend-process or host-crash durability,
+production sandbox, production IAM, HA/DR, live-source completeness, cross-host
+determinism, or distributed exactly-once delivery claim.

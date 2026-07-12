@@ -8,13 +8,18 @@ use outcomes_blobstore::{BlobStoreError, FileBlobStore};
 use outcomes_corpus::{ChallengeCorpusAdapter, CorpusError, LocalFixtureCorpus};
 use outcomes_domain::{
     ClaimSpecError, ClaimTruth, DisputeDecisionKind, EvidenceClassification, ExecutionManifestV1,
-    ExecutionOutcome, ReconciliationStatus, ResolutionAttestationV1, ResolutionFinality,
-    SettlementNetwork, Sha256Digest, UtcTimestamp, domain_separated_digest,
-    fixtures::local_demo_claim_draft,
+    ExecutionOutcome, MarketBindingV1, MutationContext, MutationScope, OutcomeEvidenceBundleV1,
+    ReconciliationResultV1, ReconciliationStatus, ResolutionAttestationV1, ResolutionFinality,
+    ResolutionRecordV1, SettlementNetwork, Sha256Digest, StateSlice, SubmissionReceiptV1,
+    UnsignedSettlementIntentV1, UtcTimestamp, domain_separated_digest,
+    fixtures::local_demo_claim_draft, submission_receipt_digest,
 };
 use outcomes_evidence::{
     AttestorRegistry, DevelopmentSigner, EvidenceBundleInput, EvidenceError, RegisteredAttestor,
     build_evidence_bundle, verify_evidence_bundle,
+};
+use outcomes_persistence_sqlx::{
+    AppendOutcome, PersistenceError, SettlementRecoveryAction, SqliteStore,
 };
 use outcomes_resolution::{
     ResolutionBlocker, ResolutionError, ResolutionEvaluation, decide_dispute,
@@ -81,6 +86,40 @@ pub struct ScenarioReport {
     pub settlement_eligibility: Option<SettlementEligibilityAssessment>,
 }
 
+/// Retained proof of the bounded local lost-receipt restart contract.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LocalRecoveryReportV1 {
+    /// Fixed report schema.
+    pub schema_version: String,
+    /// Relative retained `SQLite` artifact.
+    pub database_file: String,
+    /// Durable settlement intent identity.
+    pub intent_id: String,
+    /// Request digest persisted before the only submission.
+    pub request_digest: Sha256Digest,
+    /// Canonical recovered receipt identity.
+    pub receipt_digest: Sha256Digest,
+    /// Canonical terminal reconciliation identity.
+    pub reconciliation_digest: Sha256Digest,
+    /// Restart action immediately after the caller loses the receipt.
+    pub first_restart_action: String,
+    /// Restart action after receipt recovery and reconciliation are durable.
+    pub final_restart_action: String,
+    /// Exact durable intent cardinality.
+    pub intent_count: u64,
+    /// Exact durable receipt cardinality.
+    pub receipt_count: u64,
+    /// Exact durable reconciliation cardinality.
+    pub reconciliation_count: u64,
+    /// Calls crossing the mock submission boundary.
+    pub submission_call_count: usize,
+    /// Distinct accepted mock effects.
+    pub mock_effect_count: usize,
+    /// Precise evidence ceiling for this probe.
+    pub claim_ceiling: String,
+}
+
 /// Application composition failures.
 #[derive(Debug, Error)]
 pub enum ApplicationError {
@@ -123,9 +162,15 @@ pub enum ApplicationError {
     /// Domain payload hashing failed.
     #[error(transparent)]
     Canonicalization(#[from] outcomes_domain::CanonicalizationError),
+    /// Durable local persistence failed closed.
+    #[error(transparent)]
+    Persistence(#[from] PersistenceError),
     /// A composed acceptance invariant was violated.
     #[error("scenario invariant violated: {0}")]
     ScenarioInvariant(&'static str),
+    /// A retained recovery artifact or transition violated the bounded contract.
+    #[error("local recovery invariant violated: {0}")]
+    RecoveryInvariant(String),
 }
 
 /// Run the local claim-to-final-resolution scenario without network access.
@@ -1095,6 +1140,482 @@ fn build_application_bundle(
     Ok((bundle, bytes_by_digest))
 }
 
+const LOCAL_RECOVERY_DB: &str = "settlement-recovery.sqlite3";
+const LOCAL_RECOVERY_REPORT: &str = "local-recovery-report.json";
+const LOCAL_RECOVERY_CEILING: &str = "Application-restart recovery using file-backed SQLite and a retained in-memory mock authority; no backend-process durability, host-crash recovery, live status lookup, PostgreSQL runtime recovery, distributed exactly-once delivery, or HA/DR claim.";
+
+/// Exercise one lost-receipt recovery through two real `SQLite` reopen boundaries.
+///
+/// This use case performs one in-memory mock submission and no network writes.
+///
+/// # Errors
+///
+/// Returns a typed construction, persistence, artifact, or invariant failure.
+#[allow(clippy::too_many_lines)]
+pub async fn run_local_lost_receipt_recovery(
+    artifact_root: &Path,
+) -> Result<LocalRecoveryReportV1, ApplicationError> {
+    fs::create_dir_all(artifact_root)?;
+    let database_path = artifact_root.join(LOCAL_RECOVERY_DB);
+    if database_path.exists() {
+        return Err(ApplicationError::RecoveryInvariant(
+            "retained recovery database already exists".to_owned(),
+        ));
+    }
+    let claim = local_demo_claim_draft()?.freeze()?;
+    let (bundle, final_resolution, binding, intent) =
+        build_local_recovery_prerequisites(&claim, artifact_root)?;
+    let request_digest = domain_separated_digest("hsai.mock-hip4-request.v1", &intent)?;
+    let store = SqliteStore::connect_path(&database_path, 1).await?;
+    store.migrate().await?;
+    store
+        .freeze_claim(
+            &recovery_freeze_context("local-recovery-freeze"),
+            &claim,
+            &timestamp("2026-07-10T10:45:00Z")?,
+            env!("CARGO_PKG_VERSION"),
+        )
+        .await?;
+    store
+        .persist_settlement_prerequisites(
+            &recovery_prerequisite_context("local-recovery-prerequisites"),
+            &claim,
+            &bundle,
+            &final_resolution,
+            &binding,
+            &timestamp("2026-07-10T10:46:00Z")?,
+        )
+        .await?;
+    store
+        .persist_settlement_intent(
+            &recovery_settlement_context("local-recovery-intent"),
+            &intent,
+            request_digest,
+            &timestamp("2026-07-10T10:47:00Z")?,
+        )
+        .await?;
+
+    let mut backend = Hip4MockBackend::default();
+    let lost_receipt = backend.submit(&intent, timestamp("2026-07-10T10:48:00Z")?)?;
+    if lost_receipt.request_digest != request_digest {
+        return Err(ApplicationError::RecoveryInvariant(
+            "mock receipt differs from the pre-submit request digest".to_owned(),
+        ));
+    }
+    drop(lost_receipt);
+    store.checkpoint_and_close().await?;
+
+    let restarted = SqliteStore::connect_path(&database_path, 1).await?;
+    restarted.migrate().await?;
+    let first = restarted
+        .settlement_recovery_integrity(&intent.intent_id)
+        .await?
+        .ok_or_else(|| ApplicationError::RecoveryInvariant("durable intent missing".to_owned()))?;
+    if first.recovery.action != SettlementRecoveryAction::QueryExternalStatus
+        || first.intent_count != 1
+        || first.receipt_count != 0
+        || first.reconciliation_count != 0
+        || backend.submission_call_count() != 1
+        || backend.effect_count() != 1
+    {
+        return Err(ApplicationError::RecoveryInvariant(
+            "first restart did not require authoritative lookup with one effect".to_owned(),
+        ));
+    }
+    let receipt = backend
+        .recover_receipt(&first.recovery.intent)?
+        .ok_or_else(|| {
+            ApplicationError::RecoveryInvariant("authoritative receipt missing".to_owned())
+        })?;
+    if backend.submission_call_count() != 1 {
+        return Err(ApplicationError::RecoveryInvariant(
+            "receipt recovery crossed the submission boundary".to_owned(),
+        ));
+    }
+    let receipt_recorded_at = timestamp("2026-07-10T10:48:01Z")?;
+    if restarted
+        .record_settlement_receipt(
+            &recovery_settlement_context("local-recovery-receipt"),
+            &receipt,
+            &receipt_recorded_at,
+        )
+        .await?
+        != AppendOutcome::Inserted
+    {
+        return Err(ApplicationError::RecoveryInvariant(
+            "recovered receipt was not inserted exactly once".to_owned(),
+        ));
+    }
+    let reconciliation = backend.reconcile(
+        &binding,
+        &final_resolution,
+        timestamp("2026-07-10T10:49:00Z")?,
+    )?;
+    if restarted
+        .record_settlement_reconciliation(
+            &recovery_settlement_context("local-recovery-reconciliation"),
+            &intent.intent_id,
+            &reconciliation,
+        )
+        .await?
+        != AppendOutcome::Inserted
+    {
+        return Err(ApplicationError::RecoveryInvariant(
+            "reconciliation was not inserted exactly once".to_owned(),
+        ));
+    }
+    if restarted
+        .record_settlement_receipt(
+            &recovery_settlement_context("local-recovery-receipt-replay"),
+            &receipt,
+            &receipt_recorded_at,
+        )
+        .await?
+        != AppendOutcome::ExistingIdentical
+        || restarted
+            .record_settlement_reconciliation(
+                &recovery_settlement_context("local-recovery-reconciliation-replay"),
+                &intent.intent_id,
+                &reconciliation,
+            )
+            .await?
+            != AppendOutcome::ExistingIdentical
+    {
+        return Err(ApplicationError::RecoveryInvariant(
+            "exact recovery replay was not idempotent".to_owned(),
+        ));
+    }
+    restarted.checkpoint_and_close().await?;
+
+    let completed_store = SqliteStore::connect_path(&database_path, 1).await?;
+    completed_store.migrate().await?;
+    let completed = completed_store
+        .settlement_recovery_integrity(&intent.intent_id)
+        .await?
+        .ok_or_else(|| {
+            ApplicationError::RecoveryInvariant("completed recovery missing".to_owned())
+        })?;
+    if completed.recovery.action != SettlementRecoveryAction::Complete
+        || completed.intent_count != 1
+        || completed.receipt_count != 1
+        || completed.reconciliation_count != 1
+        || completed.recovery.intent != intent
+        || completed.recovery.receipt.as_ref() != Some(&receipt)
+        || completed.recovery.latest_reconciliation.as_ref() != Some(&reconciliation)
+    {
+        return Err(ApplicationError::RecoveryInvariant(
+            "terminal durable recovery integrity differs from the exact contract".to_owned(),
+        ));
+    }
+    completed_store.checkpoint_and_close().await?;
+    reject_sqlite_sidecars(&database_path)?;
+
+    let receipt_digest = submission_receipt_digest(&receipt)?;
+    let reconciliation_digest = domain_separated_digest(
+        "hsai.persisted-settlement-reconciliation.v1",
+        &reconciliation,
+    )?;
+    let report = LocalRecoveryReportV1 {
+        schema_version: "hsai.local-lost-receipt-recovery-report.v1".to_owned(),
+        database_file: LOCAL_RECOVERY_DB.to_owned(),
+        intent_id: intent.intent_id.clone(),
+        request_digest,
+        receipt_digest,
+        reconciliation_digest,
+        first_restart_action: "QUERY_EXTERNAL_STATUS".to_owned(),
+        final_restart_action: "COMPLETE".to_owned(),
+        intent_count: completed.intent_count,
+        receipt_count: completed.receipt_count,
+        reconciliation_count: completed.reconciliation_count,
+        submission_call_count: backend.submission_call_count(),
+        mock_effect_count: backend.effect_count(),
+        claim_ceiling: LOCAL_RECOVERY_CEILING.to_owned(),
+    };
+    for (name, value) in [
+        ("settlement-intent.json", serde_json::to_value(&intent)?),
+        ("recovered-receipt.json", serde_json::to_value(&receipt)?),
+        (
+            "reconciliation.json",
+            serde_json::to_value(&reconciliation)?,
+        ),
+        (LOCAL_RECOVERY_REPORT, serde_json::to_value(&report)?),
+    ] {
+        fs::write(artifact_root.join(name), serde_json::to_vec_pretty(&value)?)?;
+    }
+    verify_local_lost_receipt_recovery(artifact_root, &report).await?;
+    Ok(report)
+}
+
+/// Read-only verification of a retained local recovery database and typed artifacts.
+///
+/// # Errors
+///
+/// Returns an artifact, persistence, identity, cardinality, or report mismatch.
+pub async fn verify_local_lost_receipt_recovery(
+    artifact_root: &Path,
+    expected_report: &LocalRecoveryReportV1,
+) -> Result<(), ApplicationError> {
+    let report: LocalRecoveryReportV1 =
+        serde_json::from_slice(&fs::read(artifact_root.join(LOCAL_RECOVERY_REPORT))?)?;
+    if &report != expected_report
+        || report.schema_version != "hsai.local-lost-receipt-recovery-report.v1"
+        || report.database_file != LOCAL_RECOVERY_DB
+        || report.claim_ceiling != LOCAL_RECOVERY_CEILING
+        || report.first_restart_action != "QUERY_EXTERNAL_STATUS"
+        || report.final_restart_action != "COMPLETE"
+        || report.submission_call_count != 1
+        || report.mock_effect_count != 1
+    {
+        return Err(ApplicationError::RecoveryInvariant(
+            "retained recovery report differs from the expected bounded contract".to_owned(),
+        ));
+    }
+    let intent: UnsignedSettlementIntentV1 =
+        serde_json::from_slice(&fs::read(artifact_root.join("settlement-intent.json"))?)?;
+    let receipt: SubmissionReceiptV1 =
+        serde_json::from_slice(&fs::read(artifact_root.join("recovered-receipt.json"))?)?;
+    let reconciliation: ReconciliationResultV1 =
+        serde_json::from_slice(&fs::read(artifact_root.join("reconciliation.json"))?)?;
+    if intent.intent_id != report.intent_id
+        || domain_separated_digest("hsai.mock-hip4-request.v1", &intent)? != report.request_digest
+        || submission_receipt_digest(&receipt)? != report.receipt_digest
+        || domain_separated_digest(
+            "hsai.persisted-settlement-reconciliation.v1",
+            &reconciliation,
+        )? != report.reconciliation_digest
+    {
+        return Err(ApplicationError::RecoveryInvariant(
+            "exported recovery records fail canonical identity verification".to_owned(),
+        ));
+    }
+    reject_sqlite_sidecars(&artifact_root.join(LOCAL_RECOVERY_DB))?;
+    let store = SqliteStore::connect_read_only(&artifact_root.join(LOCAL_RECOVERY_DB)).await?;
+    let integrity = store
+        .settlement_recovery_integrity(&report.intent_id)
+        .await?
+        .ok_or_else(|| {
+            ApplicationError::RecoveryInvariant("read-only recovery state missing".to_owned())
+        })?;
+    store.close().await;
+    if integrity.recovery.action != SettlementRecoveryAction::Complete
+        || integrity.recovery.intent != intent
+        || integrity.recovery.receipt != Some(receipt)
+        || integrity.recovery.latest_reconciliation != Some(reconciliation)
+        || integrity.intent_count != report.intent_count
+        || integrity.receipt_count != report.receipt_count
+        || integrity.reconciliation_count != report.reconciliation_count
+        || integrity.receipt_digest != Some(report.receipt_digest)
+        || integrity.latest_reconciliation_digest != Some(report.reconciliation_digest)
+    {
+        return Err(ApplicationError::RecoveryInvariant(
+            "read-only SQLite integrity differs from the retained report".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn recovery_freeze_context(request_id: &str) -> MutationContext {
+    MutationContext {
+        actor_id: "local-beta-recovery".to_owned(),
+        request_id: request_id.to_owned(),
+        scope: MutationScope::new([
+            StateSlice::ClaimRegistryV1,
+            StateSlice::OperationsV1,
+            StateSlice::DeliveryV1,
+        ]),
+    }
+}
+
+fn recovery_prerequisite_context(request_id: &str) -> MutationContext {
+    MutationContext {
+        actor_id: "local-beta-recovery".to_owned(),
+        request_id: request_id.to_owned(),
+        scope: MutationScope::new([
+            StateSlice::EvidenceStoreV1,
+            StateSlice::ResolutionLedgerV1,
+            StateSlice::MarketBindingV1,
+            StateSlice::OperationsV1,
+            StateSlice::DeliveryV1,
+        ]),
+    }
+}
+
+fn recovery_settlement_context(request_id: &str) -> MutationContext {
+    MutationContext {
+        actor_id: "local-beta-recovery".to_owned(),
+        request_id: request_id.to_owned(),
+        scope: MutationScope::new([
+            StateSlice::SettlementLedgerV1,
+            StateSlice::OperationsV1,
+            StateSlice::DeliveryV1,
+        ]),
+    }
+}
+
+fn reject_sqlite_sidecars(database_path: &Path) -> Result<(), ApplicationError> {
+    for suffix in ["-wal", "-shm"] {
+        let sidecar = std::path::PathBuf::from(format!("{}{suffix}", database_path.display()));
+        if sidecar.exists() {
+            return Err(ApplicationError::RecoveryInvariant(format!(
+                "SQLite sidecar remains after checkpoint: {suffix}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_lines)]
+fn build_local_recovery_prerequisites(
+    claim: &outcomes_domain::ClaimSpecV1,
+    artifact_root: &Path,
+) -> Result<
+    (
+        OutcomeEvidenceBundleV1,
+        ResolutionRecordV1,
+        MarketBindingV1,
+        UnsignedSettlementIntentV1,
+    ),
+    ApplicationError,
+> {
+    let mut ledger =
+        LocalSubmissionLedger::new(claim.claim_id.clone(), timestamp("2026-07-10T10:00:00Z")?);
+    let candidate = ledger.ingest(
+        claim.claim_id.clone(),
+        "local.recovery",
+        "submission-1",
+        "1",
+        None,
+        timestamp("2026-07-10T10:30:00Z")?,
+        timestamp("2026-07-10T10:30:01Z")?,
+        "application/octet-stream",
+        b"hsai-pass-v1".to_vec(),
+    )?;
+    let admission = evaluate_admission(claim, &candidate)?;
+    let mut runner = ScriptedRunner::exact_bytes_fixture();
+    let mut executions = Vec::new();
+    for index in 0..2 {
+        let started = timestamp("2026-07-10T10:31:00Z")?;
+        let ended = timestamp("2026-07-10T10:31:01Z")?;
+        executions.push(runner.execute(&RunnerRequest {
+            claim,
+            candidate: &candidate,
+            candidate_bytes: b"hsai-pass-v1",
+            admission: &admission,
+            run_id: &format!("recovery-run-{index}"),
+            started_at: &started,
+            ended_at: &ended,
+            logical_time: &started,
+        })?);
+    }
+    let cutoff = timestamp("2026-07-10T10:40:00Z")?;
+    let observation = ledger.snapshot(None, &cutoff, &timestamp("2026-07-10T10:40:01Z")?)?;
+    let evaluation =
+        evaluate_existential_claim(claim, &cutoff, observation.completeness, &executions, 0)?;
+    if evaluation.truth != ClaimTruth::True {
+        return Err(ApplicationError::RecoveryInvariant(
+            "recovery prerequisite evaluation is not TRUE".to_owned(),
+        ));
+    }
+    let evidence_root = artifact_root.join("recovery-evidence");
+    let (bundle, blobs) = build_application_bundle(
+        claim,
+        std::slice::from_ref(&observation),
+        std::slice::from_ref(&candidate),
+        std::slice::from_ref(&admission),
+        &executions,
+        &[],
+        &evaluation,
+        Vec::new(),
+        &evidence_root,
+    )?;
+    verify_evidence_bundle(&bundle, &blobs)?;
+    let proposed_at = cutoff;
+    let dispute_end = proposed_at.checked_add_seconds(claim.dispute_policy.window_seconds)?;
+    let policy_digest =
+        domain_separated_digest("hsai.resolution-policy.v1", &claim.resolution_policy)?;
+    let signer_a = DevelopmentSigner::generate("recovery-attestor-a", "recovery-key-a")?;
+    let signer_b = DevelopmentSigner::generate("recovery-attestor-b", "recovery-key-b")?;
+    let mut registry = AttestorRegistry::default();
+    register_signers(
+        &mut registry,
+        [
+            (&signer_a, "recovery-attestor-a", "recovery-key-a"),
+            (&signer_b, "recovery-attestor-b", "recovery-key-b"),
+        ],
+    )?;
+    let provisional_attestations = sign_pair(
+        [&signer_a, &signer_b],
+        claim,
+        &evaluation,
+        ResolutionFinality::Provisional,
+        policy_digest,
+        bundle.bundle_digest,
+        bundle.completeness_assessment_digest,
+        &proposed_at,
+        &dispute_end,
+        &proposed_at,
+        1,
+    )?;
+    let provisional = propose_resolution(
+        claim,
+        &evaluation,
+        bundle.bundle_digest,
+        &provisional_attestations,
+        &registry,
+        &proposed_at,
+    )?;
+    let final_attestations = sign_pair(
+        [&signer_a, &signer_b],
+        claim,
+        &evaluation,
+        ResolutionFinality::Final,
+        policy_digest,
+        bundle.bundle_digest,
+        bundle.completeness_assessment_digest,
+        &proposed_at,
+        &dispute_end,
+        &dispute_end,
+        2,
+    )?;
+    let final_resolution = finalize_resolution(
+        claim,
+        &provisional,
+        &dispute_end,
+        false,
+        false,
+        &final_attestations,
+        &registry,
+    )?;
+    let market = parse_outcome_meta(
+        SettlementNetwork::Mock,
+        include_bytes!("../../../fixtures/hip4/outcome-meta.json"),
+    )?;
+    let capabilities = capability_matrix(SettlementNetwork::Mock, proposed_at.clone());
+    let binding = bind_market(
+        claim,
+        &market,
+        0,
+        1,
+        domain_separated_digest("hsai.backend-capability.v1", &capabilities)?,
+        "local-beta-recovery",
+        proposed_at,
+        "development-recovery-binding-signature".to_owned(),
+    )?;
+    let readiness = preflight(
+        &binding,
+        &final_resolution,
+        market.metadata_digest,
+        &capabilities,
+    );
+    let intent = build_intent(
+        &binding,
+        &final_resolution,
+        &readiness,
+        dispute_end.checked_add_seconds(3_600)?,
+    )?;
+    Ok((bundle, final_resolution, binding, intent))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn sign_superseding_pair(
     signers: [&DevelopmentSigner; 2],
@@ -1204,6 +1725,61 @@ mod tests {
         CONTAINER_CANDIDATE_PATH, CONTAINER_VERIFIER_PATH, DockerVerificationRunner,
         OciSandboxPolicy, docker_environment_digest,
     };
+
+    #[tokio::test]
+    async fn contract_local_lost_receipt_recovery_is_retained_and_read_only_verifiable()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let report = run_local_lost_receipt_recovery(directory.path()).await?;
+        assert_eq!(report.first_restart_action, "QUERY_EXTERNAL_STATUS");
+        assert_eq!(report.final_restart_action, "COMPLETE");
+        assert_eq!(report.intent_count, 1);
+        assert_eq!(report.receipt_count, 1);
+        assert_eq!(report.reconciliation_count, 1);
+        assert_eq!(report.submission_call_count, 1);
+        assert_eq!(report.mock_effect_count, 1);
+        verify_local_lost_receipt_recovery(directory.path(), &report).await?;
+        assert!(directory.path().join(LOCAL_RECOVERY_DB).is_file());
+        assert!(
+            !directory
+                .path()
+                .join(format!("{LOCAL_RECOVERY_DB}-wal"))
+                .exists()
+        );
+        assert!(
+            !directory
+                .path()
+                .join(format!("{LOCAL_RECOVERY_DB}-shm"))
+                .exists()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn contract_local_recovery_verifier_rejects_altered_intent_and_missing_receipt()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let altered = tempfile::tempdir()?;
+        let report = run_local_lost_receipt_recovery(altered.path()).await?;
+        let intent_path = altered.path().join("settlement-intent.json");
+        let mut intent: serde_json::Value = serde_json::from_slice(&fs::read(&intent_path)?)?;
+        intent["expires_at"] = serde_json::Value::String("2026-07-10T15:00:01Z".to_owned());
+        fs::write(&intent_path, serde_json::to_vec_pretty(&intent)?)?;
+        assert!(
+            verify_local_lost_receipt_recovery(altered.path(), &report)
+                .await
+                .is_err()
+        );
+
+        let missing = tempfile::tempdir()?;
+        let report = run_local_lost_receipt_recovery(missing.path()).await?;
+        fs::remove_file(missing.path().join("recovered-receipt.json"))?;
+        assert!(
+            verify_local_lost_receipt_recovery(missing.path(), &report)
+                .await
+                .is_err()
+        );
+        Ok(())
+    }
 
     #[test]
     fn contract_true_false_and_error_scenarios_preserve_boundaries() -> Result<(), ApplicationError>

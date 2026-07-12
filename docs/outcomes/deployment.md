@@ -5,10 +5,13 @@ migrations and a filesystem content-addressed store. It is not a production
 deployment claim.
 
 The controlled local beta is governed by the immutable mock-only profile in
-`config/local-beta-profile.json` and the two-person operating procedure in
+`config/local-beta-profile-v2.json` and the two-person operating procedure in
 `docs/outcomes/local-beta-runbook.md`. It permits only serial, trusted-operator,
-single-host runs of the seven recorded scenarios. It does not authorize live
-writes, hosted users, arbitrary unreviewed validators, testnet, or mainnet.
+single-host runs of the seven recorded scenarios plus the file-backed SQLite
+lost-receipt recovery check. That check covers an application restart with a
+retained mock authority; it does not establish backend-process or host-crash
+durability. The beta does not authorize live writes, hosted users, arbitrary
+unreviewed validators, testnet, or mainnet.
 
 Production topology requires the API and worker as separate non-root services,
 PostgreSQL with transactional outbox, S3-compatible immutable/versioned object

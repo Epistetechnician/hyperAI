@@ -4,9 +4,10 @@ Implemented and tested locally does not mean production-ready.
 
 - The controlled local beta profile is an immutable-config operating boundary,
   not a hosted runtime deployment mechanism. The CLI loads and enforces its
-  exact mock-only, serial seven-scenario contract, binds the copied profile into
-  each run manifest, requires bounded clean-source/tool provenance, auto-seals
-  an exact-file inventory, and refuses stale run-directory reuse. The seal
+  exact mock-only, serial seven-scenario plus SQLite-recovery contract, binds
+  the copied profile into each run manifest, requires bounded clean-source/tool
+  provenance, auto-seals an exact-file inventory, and refuses stale
+  run-directory reuse. The seal
   detects retained-byte drift but is not a signature, content-safety scan,
   adversarial filesystem snapshot, or trusted-build attestation. Operator and
   independent-reviewer signoff remain required.

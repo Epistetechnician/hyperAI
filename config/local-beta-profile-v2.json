@@ -1,0 +1,23 @@
+{
+  "schema_version": "hsai.local-beta-profile.v2",
+  "profile_id": "hermetic-trusted-operator-v2",
+  "network": "MOCK",
+  "backend": "mock-hip4",
+  "live_writes": false,
+  "serial_concurrency": 1,
+  "scenarios": [
+    "true",
+    "false",
+    "invalid-then-valid",
+    "disputed-false-counterexample-true",
+    "incomplete-observation",
+    "divergent-replays",
+    "runner-error"
+  ],
+  "operational_checks": [
+    "sqlite-settlement-recovery"
+  ],
+  "artifact_classification": "PUBLIC",
+  "claim_ceiling": "Controlled, trusted-operator, single-host local beta of a hermetic verifiable-outcome protocol with offline-verifiable evidence, idempotent in-memory mock settlement, and application-restart recovery using file-backed SQLite with a retained in-memory mock authority; no live market creation or settlement, production sandbox, production IAM, backend-process or host-crash recovery, live status lookup, PostgreSQL runtime recovery, HA/DR, live-source completeness, cross-host determinism, or distributed exactly-once external delivery claim.",
+  "stop_on_failure": true
+}
