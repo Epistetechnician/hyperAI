@@ -4,17 +4,17 @@
   "private": true,
   "packageManager": "pnpm@11.7.0",
   "scripts": {
-    "lint": "pnpm run lint:fast && pnpm run verify:contracts && pnpm run verify:full",
-    "lint:fast": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets --all-features -- -D warnings",
-    "test:focused": "cargo test -p outcomes-domain -p outcomes-persistence-sqlx -p outcomes-blobstore -p outcomes-corpus -p outcomes-source -p outcomes-runner -p outcomes-harness -p outcomes-evidence -p outcomes-resolution -p outcomes-application -p hyperliquid-hip4 -p outcomes-api -p outcomes-cli -p outcomes-worker",
-    "verify:contracts": "cargo test --workspace contract_",
-    "verify:full": "cargo test --workspace --all-features",
-    "verify:external-readonly": "cargo test -p hyperliquid-hip4 --features live-readonly -- --ignored",
-    "verify:infra-postgres": "cargo test -p outcomes-persistence-sqlx tests::contract_postgres_migrations_apply_in_isolated_schema -- --ignored --exact",
-    "verify:infra-oci": "cargo test -p outcomes-runner external_docker -- --ignored --test-threads=1 && cargo test -p outcomes-application tests::external_docker_true_path_reaches_final_mock_settlement -- --ignored --exact --test-threads=1",
-    "beta:local": "cargo run -p outcomes-cli -- outcomes beta rehearse --artifact-root artifacts/local-beta",
-    "beta:finalize": "cargo run -p outcomes-cli -- outcomes beta finalize --artifact-root artifacts/local-beta",
-    "beta:verify": "cargo run -p outcomes-cli -- outcomes beta verify --artifact-root artifacts/local-beta",
-    "hsai": "cargo run -p outcomes-cli"
+    "lint": "corepack pnpm run lint:fast && corepack pnpm run verify:contracts && corepack pnpm run verify:full",
+    "lint:fast": "sh scripts/with-pinned-rust.sh cargo fmt --all -- --check && sh scripts/with-pinned-rust.sh cargo clippy --workspace --all-targets --all-features -- -D warnings",
+    "test:focused": "sh scripts/with-pinned-rust.sh cargo test -p outcomes-domain -p outcomes-persistence-sqlx -p outcomes-blobstore -p outcomes-corpus -p outcomes-source -p outcomes-runner -p outcomes-harness -p outcomes-evidence -p outcomes-resolution -p outcomes-application -p hyperliquid-hip4 -p outcomes-api -p outcomes-cli -p outcomes-worker",
+    "verify:contracts": "sh scripts/with-pinned-rust.sh cargo test --workspace contract_",
+    "verify:full": "sh scripts/with-pinned-rust.sh cargo test --workspace --all-features",
+    "verify:external-readonly": "sh scripts/with-pinned-rust.sh cargo test -p hyperliquid-hip4 --features live-readonly -- --ignored",
+    "verify:infra-postgres": "sh scripts/with-pinned-rust.sh cargo test -p outcomes-persistence-sqlx tests::contract_postgres_migrations_apply_in_isolated_schema -- --ignored --exact",
+    "verify:infra-oci": "sh scripts/with-pinned-rust.sh cargo test -p outcomes-runner external_docker -- --ignored --test-threads=1 && sh scripts/with-pinned-rust.sh cargo test -p outcomes-application tests::external_docker_true_path_reaches_final_mock_settlement -- --ignored --exact --test-threads=1",
+    "beta:local": "sh scripts/with-pinned-rust.sh cargo run -p outcomes-cli -- outcomes beta rehearse --artifact-root artifacts/local-beta",
+    "beta:finalize": "sh scripts/with-pinned-rust.sh cargo run -p outcomes-cli -- outcomes beta finalize --artifact-root artifacts/local-beta",
+    "beta:verify": "sh scripts/with-pinned-rust.sh cargo run -p outcomes-cli -- outcomes beta verify --artifact-root artifacts/local-beta",
+    "hsai": "sh scripts/with-pinned-rust.sh cargo run -p outcomes-cli"
   }
 }

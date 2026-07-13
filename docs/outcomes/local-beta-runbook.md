@@ -16,7 +16,10 @@ Both the operator and an independent reviewer must confirm all of the following
 before the first scenario starts:
 
 1. The checked-out commit is recorded and `git status --short` is empty.
-2. The pinned Rust toolchain and pnpm version are installed.
+2. Rustup, Corepack, the pinned Rust toolchain, and the pnpm version are
+   installed. Corepack must resolve the `packageManager` pin. The pnpm
+   entrypoints must resolve Rust through `scripts/with-pinned-rust.sh`; a system
+   or Homebrew Rust earlier in the original `PATH` is not authoritative.
 3. The profile has `network: MOCK`, `backend: mock-hip4`,
    `live_writes: false`, `serial_concurrency: 1`, exactly the seven approved
    scenarios, and the ordered `sqlite-settlement-recovery` and
@@ -37,14 +40,14 @@ Run from the repository root. Replace the example run identifier with a unique
 UTC identifier. Do not run scenarios concurrently.
 
 ```sh
-pnpm install --ignore-scripts --frozen-lockfile
-pnpm run lint
+corepack pnpm install --ignore-scripts --frozen-lockfile
+corepack pnpm run lint
 git status --short
 RUN_ID=20260712T120000Z
 BETA_PARENT="artifacts/local-beta"
 BETA_ROOT="${BETA_PARENT}/${RUN_ID}"
-pnpm run beta:local --run-id "${RUN_ID}"
-pnpm run beta:verify --run-id "${RUN_ID}"
+corepack pnpm run beta:local --run-id "${RUN_ID}"
+corepack pnpm run beta:verify --run-id "${RUN_ID}"
 ```
 
 The rehearsal itself requires a clean source tree, records bounded Git/tool and
@@ -62,8 +65,8 @@ interrupted run that wrote a complete PASS manifest before inventory creation.
 When explicitly provisioned, the optional local infrastructure gates are:
 
 ```sh
-HSAI_TEST_POSTGRES_URL=postgres://... pnpm run verify:infra-postgres
-HSAI_TEST_OCI_IMAGE_REPOSITORY=alpine HSAI_TEST_OCI_IMAGE_DIGEST=sha256:... HSAI_TEST_OCI_PLATFORM=linux/arm64 pnpm run verify:infra-oci
+HSAI_TEST_POSTGRES_URL=postgres://... corepack pnpm run verify:infra-postgres
+HSAI_TEST_OCI_IMAGE_REPOSITORY=alpine HSAI_TEST_OCI_IMAGE_DIGEST=sha256:... HSAI_TEST_OCI_PLATFORM=linux/arm64 corepack pnpm run verify:infra-oci
 ```
 
 The OCI gate never pulls an image. Passing either optional gate does not raise
@@ -117,12 +120,14 @@ Stop immediately and do not start another scenario when any of these occurs:
   the intent and use authoritative lookup only;
 - the same unexplained error occurs twice.
 
-Freeze the affected run directory read-only, preserve process and host facts,
-and copy `docs/templates/local-beta-incident.md` into the run directory. Record
-the affected state slices, timeline, hashes, external-effect count, containment,
-and recovery evidence. A source gap prohibits negative finality. Replay
-divergence quarantines the verifier/environment tuple. Evidence loss blocks
-publication and finalization until every restored digest verifies.
+Preserve process and host facts, create incident metadata as a detached sibling
+such as `${BETA_ROOT}.incident-${INCIDENT_ID}.md`, then freeze the affected run
+directory read-only. Never add an incident file to a sealed run because that
+would invalidate its exact-set inventory. Record the affected state slices,
+timeline, hashes, external-effect count, containment, and recovery evidence. A
+source gap prohibits negative finality. Replay divergence quarantines the
+verifier/environment tuple. Evidence loss blocks publication and finalization
+until every restored digest verifies.
 
 ## Resume
 
@@ -141,11 +146,11 @@ decisions, supersession records, intents, receipts, reconciliations, gate logs,
 incident records, and final signoff. Treat the database and evidence artifacts
 as one recovery unit. Never retain private keys or a populated `.env` file.
 
-The CLI-generated inventory is the integrity boundary. Verify the retained copy
+The CLI-generated inventory is the integrity boundary. Verify the sealed source
 from the repository root:
 
 ```sh
-pnpm run beta:verify --run-id "${RUN_ID}"
+corepack pnpm run beta:verify --run-id "${RUN_ID}"
 ```
 
 Copy the sealed directory to its declared retention location and run the same
@@ -155,6 +160,13 @@ tamper rejects. The inventory proves exact retained bytes, not content safety;
 the operator and reviewer must still inspect for credentials, private evidence,
 or personal data before sharing.
 
+For a retained parent outside `artifacts/local-beta`, invoke the same CLI through
+the pinned `hsai` entrypoint:
+
+```sh
+corepack pnpm run hsai outcomes beta verify --artifact-root "${RETENTION_PARENT}" --run-id "${RUN_ID}"
+```
+
 ## Signoff and claim ceiling
 
 Keep completed signoff as detached sibling metadata outside the sealed run root,
@@ -163,6 +175,9 @@ inventory. The operator and reviewer must both sign the exact commit, profile
 digest, inventory digest, scenario matrix, deviations, retention decision, and
 final disposition. Permitted dispositions are `PASS`, `QUARANTINED`, and
 `INVALID`.
+An automatically populated packet remains pending until two humans complete the
+operator and independent-reviewer signatures. Agent review cannot substitute
+for either signature or establish completed `PASS` signoff.
 
 Runs `beta-001` and `beta-002` predate manifest v2 provenance and automatic
 inventory sealing. They remain useful rehearsal evidence but are legacy,

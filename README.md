@@ -27,22 +27,28 @@ disabled.
 
 ## Five-minute local demo
 
-Requires the pinned Rust toolchain and pnpm.
+Requires rustup, Corepack, and pnpm. Corepack resolves the exact `packageManager`
+pin from `package.json`; use `corepack pnpm` if a global pnpm launcher is stale or
+conflicts with an unrelated parent project. Every pnpm Rust entrypoint
+uses `scripts/with-pinned-rust.sh`: it resolves the channel from
+`rust-toolchain.toml`, prepends that installed toolchain's binary directory to
+`PATH`, and exports the same selection to child processes. A Homebrew or system
+Rust earlier in the operator's original `PATH` therefore cannot shadow the pin.
 
 ```sh
-pnpm install --ignore-scripts --frozen-lockfile
-pnpm run hsai outcomes demo computational-market --scenario true --artifact-root artifacts/true --json
-pnpm run hsai outcomes evidence verify artifacts/true/evidence-bundle.json --blob-root artifacts/true
-pnpm run hsai outcomes demo computational-market --scenario invalid-then-valid --artifact-root artifacts/invalid-then-valid --json
-pnpm run hsai outcomes demo computational-market --scenario disputed-false-counterexample-true --artifact-root artifacts/disputed-counterexample --json
-pnpm run hsai outcomes demo computational-market --scenario incomplete-observation --artifact-root artifacts/incomplete-observation --json
-pnpm run hsai outcomes demo computational-market --scenario divergent-replays --artifact-root artifacts/divergent-replays --json
-pnpm run hsai outcomes demo computational-market --scenario false --artifact-root artifacts/false --json
-pnpm run hsai outcomes demo computational-market --scenario runner-error --artifact-root artifacts/error --json
-pnpm run hsai outcomes settlement preflight --binding artifacts/true/market-binding.json --resolution artifacts/true/final-resolution.json --metadata fixtures/hip4/outcome-meta.json --capabilities artifacts/true/hip4-capabilities.json
-pnpm run hsai outcomes settlement publish artifacts/true/settlement-intent.json --dry-run
-pnpm run hsai outcomes settlement reconcile artifacts/true/mock-reconciliation.json
-pnpm run hsai outcomes corpus profiles
+corepack pnpm install --ignore-scripts --frozen-lockfile
+corepack pnpm run hsai outcomes demo computational-market --scenario true --artifact-root artifacts/true --json
+corepack pnpm run hsai outcomes evidence verify artifacts/true/evidence-bundle.json --blob-root artifacts/true
+corepack pnpm run hsai outcomes demo computational-market --scenario invalid-then-valid --artifact-root artifacts/invalid-then-valid --json
+corepack pnpm run hsai outcomes demo computational-market --scenario disputed-false-counterexample-true --artifact-root artifacts/disputed-counterexample --json
+corepack pnpm run hsai outcomes demo computational-market --scenario incomplete-observation --artifact-root artifacts/incomplete-observation --json
+corepack pnpm run hsai outcomes demo computational-market --scenario divergent-replays --artifact-root artifacts/divergent-replays --json
+corepack pnpm run hsai outcomes demo computational-market --scenario false --artifact-root artifacts/false --json
+corepack pnpm run hsai outcomes demo computational-market --scenario runner-error --artifact-root artifacts/error --json
+corepack pnpm run hsai outcomes settlement preflight --binding artifacts/true/market-binding.json --resolution artifacts/true/final-resolution.json --metadata fixtures/hip4/outcome-meta.json --capabilities artifacts/true/hip4-capabilities.json
+corepack pnpm run hsai outcomes settlement publish artifacts/true/settlement-intent.json --dry-run
+corepack pnpm run hsai outcomes settlement reconcile artifacts/true/mock-reconciliation.json
+corepack pnpm run hsai outcomes corpus profiles
 ```
 
 The TRUE, invalid-then-valid, and disputed-counterexample demos each perform one
@@ -60,17 +66,17 @@ resolution or external effect.
 ## Repository gates
 
 ```sh
-pnpm run lint:fast
-pnpm run test:focused
-pnpm run verify:contracts
-pnpm run verify:full
-pnpm run lint
+corepack pnpm run lint:fast
+corepack pnpm run test:focused
+corepack pnpm run verify:contracts
+corepack pnpm run verify:full
+corepack pnpm run lint
 ```
 
 The opt-in local infrastructure gates require explicitly selected local
 dependencies. For Docker, preload the image and export
 `HSAI_TEST_OCI_IMAGE_REPOSITORY`, `HSAI_TEST_OCI_IMAGE_DIGEST`, and the explicit
-`HSAI_TEST_OCI_PLATFORM` (`linux/arm64` or `linux/amd64`), then run `pnpm run
+`HSAI_TEST_OCI_PLATFORM` (`linux/arm64` or `linux/amd64`), then run `corepack pnpm run
 verify:infra-oci`. The gate never pulls an image.
 
 ## Controlled local beta
@@ -79,7 +85,7 @@ The trusted-operator, single-host beta is hermetic and mock-only. Use a fresh
 run ID; the command refuses to overwrite an existing session:
 
 ```sh
-pnpm run beta:local --run-id beta-001
+corepack pnpm run beta:local --run-id beta-001
 ```
 
 The rehearsal requires a clean Git tree, records bounded source/tool/input
@@ -92,7 +98,7 @@ sanitized durable denial audits with zero protected effects. It writes manifest
 v4 with raw report and database digests for both operational checks. Before
 returning PASS it creates and verifies an exact-file
 `beta-artifact-inventory.json` seal. Verify a retained run in a fresh process
-with `pnpm run beta:verify --run-id beta-005`.
+with `corepack pnpm run beta:verify --run-id beta-005`.
 It performs no live market write and does not qualify hosted operation,
 production authentication or IAM, arbitrary hostile code, backend-process or
 host-crash durability, or signed build provenance.

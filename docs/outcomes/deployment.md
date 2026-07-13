@@ -44,7 +44,7 @@ The migration contract can be rerun against an operator-supplied disposable
 database without changing the default hermetic gate:
 
 ```sh
-HSAI_TEST_POSTGRES_URL=postgres://... pnpm run verify:infra-postgres
+HSAI_TEST_POSTGRES_URL=postgres://... corepack pnpm run verify:infra-postgres
 ```
 
 The Docker infrastructure gate requires an already-present immutable image and
@@ -56,7 +56,7 @@ acceptance:
 HSAI_TEST_OCI_IMAGE_REPOSITORY=alpine \
 HSAI_TEST_OCI_IMAGE_DIGEST=sha256:... \
 HSAI_TEST_OCI_PLATFORM=linux/arm64 \
-pnpm run verify:infra-oci
+corepack pnpm run verify:infra-oci
 ```
 
 Passing this gate establishes the tested local verifier and claim-bound Docker
