@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <meta name="theme-color" content="#f2f4ef" />
+    <title>HyperAI — Compute workspace</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23102b26'/%3E%3Cpath d='M18 42V29m14 13V18m14 24V33' fill='none' stroke='%23d5eb83' stroke-linecap='round' stroke-width='7'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="/app.css" />
+    <script src="/error-envelope.js" defer></script>
+    <script src="/workload-trace.js" defer></script>
+    <script src="/connection-inventory.js" defer></script>
+    <script src="/market-supply-comparison.js" defer></script>
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#page-root">Skip to workspace</a>
+    <div class="shell" id="shell">
+      <aside class="sidebar" id="sidebar" aria-label="Main navigation">
+        <a class="brand" href="#overview" data-page="overview" aria-label="HyperAI workspace home">
+          <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span>
+          <span class="brand-name">hyper<span>AI</span></span>
+          <span class="brand-edition">WORKSPACE</span>
+        </a>
+        <div class="workspace-switcher">
+          <span class="workspace-avatar" aria-hidden="true">S</span>
+          <span class="workspace-copy"><strong>Compute studio</strong><small>Personal workspace</small></span>
+          <span class="workspace-chevron" aria-hidden="true">⌄</span>
+        </div>
+        <nav class="primary-nav">
+          <p class="nav-label">WORK</p>
+          <button class="nav-item is-active" data-page="overview" aria-current="page"><span class="nav-glyph" aria-hidden="true">◫</span>Overview</button>
+          <button class="nav-item" data-page="market"><span class="nav-glyph" aria-hidden="true">⌕</span>Market</button>
+          <button class="nav-item" data-page="deals"><span class="nav-glyph" aria-hidden="true">⇄</span>Deals</button>
+          <p class="nav-label nav-label-spaced">RESEARCH</p>
+          <button class="nav-item" data-page="data"><span class="nav-glyph" aria-hidden="true">▥</span>Data</button>
+          <button class="nav-item" data-page="eval"><span class="nav-glyph" aria-hidden="true">⌘</span>Eval</button>
+          <button class="nav-item" data-page="trade"><span class="nav-glyph" aria-hidden="true">↗</span>Trade</button>
+          <p class="nav-label nav-label-spaced">OPERATE</p>
+          <button class="nav-item" data-page="inference"><span class="nav-glyph" aria-hidden="true">◉</span>Inference</button>
+          <button class="nav-item" data-page="fleet"><span class="nav-glyph" aria-hidden="true">▦</span>Fleet</button>
+          <button class="nav-item" data-page="evidence"><span class="nav-glyph" aria-hidden="true">◇</span>Evidence</button>
+          <button class="nav-item" data-page="access"><span class="nav-glyph" aria-hidden="true">⌑</span>Agents &amp; access</button>
+          <button class="nav-item" data-page="activity"><span class="nav-glyph" aria-hidden="true">≋</span>Activity</button>
+        </nav>
+        <div class="sidebar-bottom">
+          <div class="connector-summary"><span class="connector-dot"></span><span><strong>Local shell</strong><small>No direct provider connections</small></span></div>
+          <div class="sidebar-foot"><span>HYPERAI / LOCAL</span><span class="version-tag">v0.1</span></div>
+        </div>
+      </aside>
+      <main class="main-shell">
+        <header class="topbar">
+          <div class="topbar-left"><button class="mobile-nav-toggle" id="mobile-nav-toggle" aria-label="Open navigation" aria-controls="sidebar" aria-expanded="false">☰</button><div><p class="crumbs">HYPERAI <span>/</span> <span id="page-crumb">OVERVIEW</span></p><p class="topbar-caption">One workspace. Clear boundaries.</p></div></div>
+          <div class="topbar-right"><span class="local-indicator"><i></i><span id="data-source-indicator">LOCAL · SYNTHETIC</span></span><button class="icon-button" data-page="access" aria-label="View connections and access">⌑</button><span class="avatar" aria-label="Local operator">S</span></div>
+        </header>
+        <div class="connection-banner" id="connection-banner" role="status" aria-live="polite" aria-atomic="true" hidden></div>
+        <section class="page-root" id="page-root" role="region" aria-labelledby="workspace-page-title" tabindex="-1"></section>
+        <footer class="page-footer"><span>HYPERAI INTERFACE</span><span>Market observations are advisory · No funds move in this workspace</span></footer>
+      </main>
+    </div>
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  </body>
+</html>

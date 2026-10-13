@@ -1,0 +1,47 @@
+{
+  "schema_version": "hyperai.monorepo-imports.v1",
+  "digest_algorithm": "sha256(concat(sorted(relative_path_utf8 + NUL + sha256(file_bytes)_raw + LF)))",
+  "exclusions": [
+    ".git/**",
+    "**/.dist/**",
+    "**/.mypy_cache/**",
+    "**/.pytest_cache/**",
+    "**/.venv/**",
+    "**/build/**",
+    "**/target/**",
+    "**/node_modules/**",
+    "**/__pycache__/**",
+    "**/*.pyc",
+    "**/*.egg-info/**",
+    "**/.DS_Store"
+  ],
+  "imports": [
+    {
+      "name": "simple-compute-market",
+      "path": "products/simple-compute-market",
+      "source": "arkhai-io/simple-compute-market",
+      "revision": "a1c46d20b1b2f1aabe53e1b052921a87cf9d7360",
+      "license": "MIT",
+      "file_count": 2189,
+      "tree_sha256": "afe6d9363a24fa627d9530240c190b6e68cdd1b7d6425d54d0b7547d829207ab"
+    },
+    {
+      "name": "hyperintel",
+      "path": "products/hyperintel",
+      "source": "local HyperIntel repository",
+      "revision": "d52111a07baa5fc4a7f6bfb4407731e2b9f609dc",
+      "license": "no root license file identified; public redistribution unverified",
+      "file_count": 99,
+      "tree_sha256": "62d9669279d177946a3cefe03211757cd6a48fb3bcbbdc9836d97b2d35b3b99b"
+    },
+    {
+      "name": "justai",
+      "path": "products/justai",
+      "source": "local JustAI repository working tree",
+      "revision": "9a0e56536b968cbb2cb7173e142068b53c4f9fe3",
+      "license": "no root license file identified; public redistribution unverified",
+      "file_count": 176,
+      "tree_sha256": "e853b7319aa9c1e1f4a49d5717b48e634ac2d39cd551621aa0324c0708e290c4"
+    }
+  ]
+}
