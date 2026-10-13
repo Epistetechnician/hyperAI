@@ -10,15 +10,11 @@ fixtures = []
 
 [dependencies]
 data-encoding.workspace = true
+hyperai-foundation.workspace = true
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-serde_json_canonicalizer.workspace = true
-sha2.workspace = true
-subtle.workspace = true
 thiserror.workspace = true
-time.workspace = true
-unicode-normalization.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true

@@ -6,7 +6,7 @@ use unicode_normalization::UnicodeNormalization;
 
 use crate::Sha256Digest;
 
-/// Failures produced before a resolution-critical value can be hashed.
+/// Failures produced before a protocol value can be hashed.
 #[derive(Debug, Error)]
 pub enum CanonicalizationError {
     /// The value could not be converted to JSON.
@@ -115,7 +115,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn contract_canonical_json_orders_object_keys() {
+    fn canonical_json_orders_object_keys() {
         let first = json!({"z": 1, "a": 2});
         let second = json!({"a": 2, "z": 1});
         assert_eq!(canonical_json(&first).ok(), canonical_json(&second).ok());
@@ -126,19 +126,13 @@ mod tests {
     }
 
     #[test]
-    fn contract_canonical_json_rejects_float() {
-        let error = canonical_json(&json!({"unsafe": 0.5}));
+    fn canonical_json_rejects_float_and_non_nfc() {
         assert!(matches!(
-            error,
+            canonical_json(&json!({"unsafe": 0.5})),
             Err(CanonicalizationError::FloatingPoint { .. })
         ));
-    }
-
-    #[test]
-    fn contract_canonical_json_rejects_non_nfc() {
-        let error = canonical_json(&json!({"text": "e\u{301}"}));
         assert!(matches!(
-            error,
+            canonical_json(&json!({"text": "e\u{301}"})),
             Err(CanonicalizationError::NonNormalizedUnicode { .. })
         ));
     }
@@ -168,8 +162,8 @@ mod tests {
         ) {
             let copy: BTreeMap<String, i32> = entries.clone();
             prop_assert_eq!(
-                domain_separated_digest("hsai.test.v1", &entries).ok(),
-                domain_separated_digest("hsai.test.v1", &copy).ok()
+                domain_separated_digest("hyperai.test.v1", &entries).ok(),
+                domain_separated_digest("hyperai.test.v1", &copy).ok()
             );
         }
     }

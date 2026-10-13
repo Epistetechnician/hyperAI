@@ -164,7 +164,8 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         macro_rules! assert_schema {
             ($type:ty, $name:literal) => {
-                assert_pretty(&root.join(concat!("schemas/", $name)), &schema_for!($type))?;
+                let path = root.join(concat!("schemas/", $name));
+                assert_json_semantically_equal(&path, &schema_for!($type))?;
             };
         }
         assert_schema!(ChallengeDescriptorV1, "challenge-descriptor-v1.schema.json");
@@ -225,7 +226,7 @@ mod tests {
         );
 
         let claim = local_demo_claim_draft()?.freeze()?;
-        assert_pretty(
+        assert_json_semantically_equal(
             &root.join("fixtures/claims/local-demo-claim-spec-v1.json"),
             &claim,
         )?;
@@ -238,17 +239,22 @@ mod tests {
             "claim_id": claim.claim_id,
             "claim_spec_digest": claim.claim_spec_digest()?,
         });
-        assert_pretty(
+        assert_json_semantically_equal(
             &root.join("fixtures/claims/local-demo-claim-identity-v1.json"),
             &identity,
         )?;
         Ok(())
     }
 
-    fn assert_pretty(path: &Path, value: &impl Serialize) -> Result<(), Box<dyn Error>> {
-        let mut expected = serde_json::to_vec_pretty(value)?;
-        expected.push(b'\n');
-        assert_eq!(fs::read(path)?, expected);
+    fn assert_json_semantically_equal(
+        path: &Path,
+        expected: &impl Serialize,
+    ) -> Result<(), Box<dyn Error>> {
+        let source = fs::read_to_string(path)?;
+        let actual = hyperai_foundation::parse_json_without_duplicate_keys(&source)?;
+        // Workspace feature unification can reorder object keys. Compare the
+        // parsed values canonically while still rejecting duplicate JSON keys.
+        assert_eq!(canonical_json(&actual)?, canonical_json(expected)?);
         Ok(())
     }
 }
