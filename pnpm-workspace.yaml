@@ -1,4 +1,5 @@
-packages: []
+packages:
+  - "."
 
 # These are transitive dependencies of the bundled pnpm runtime, not this
 # repository. Their install scripts are explicitly denied rather than approved.
