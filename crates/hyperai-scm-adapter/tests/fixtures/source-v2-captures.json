@@ -1,0 +1,79 @@
+{
+  "generated_at_unix_seconds": 1790281201,
+  "generator": "Simple Compute Market identity package sign_request/sign_response",
+  "source_revision": "a1c46d20b1b2f1aabe53e1b052921a87cf9d7360",
+  "vectors": [
+    {
+      "scheme": "ed25519",
+      "capture": {
+        "schema_version": "hyperai.simple-compute-market.listings-capture.v1",
+        "request": {
+          "protocol": "arkhai.market-request-signature.v2",
+          "role": "buyer",
+          "principal": { "scheme": "ed25519", "identifier": "6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw" },
+          "method": "GET",
+          "operation": "listing.list",
+          "resource": "listings",
+          "request_id": "source-vector-ed25519",
+          "timestamp": 1790281201,
+          "body_hash": "9f1ad01638d14465b533bb4e4781b6adc205f624f0772701a484f2f155654bda",
+          "proof": { "scheme": "ed25519", "value": "FOnMBCh3n6LQNAMAfQycbmHiaLsYo5scngMJfoKzs37YRNcS2j7gK2G4_UcxObDelXPg6Hp1_JVKtImoc-jPDQ" }
+        },
+        "request_body": { "query": [["limit", "2"], ["offset", "0"]] },
+        "response": {
+          "status": 200,
+          "headers": {
+            "X-Market-Signature-Version": "arkhai.market-response-signature.v2",
+            "X-Market-Identity-Scheme": "ed25519",
+            "X-Market-Identity-Identifier": "_RckOFqgx1tk-3jNYC-h2ZH96_drE8WO1wLqyDXp9hg",
+            "X-Market-Role": "registry",
+            "X-Market-Request-ID": "source-vector-ed25519",
+            "X-Market-Timestamp": "1790281201",
+            "X-Market-Signature": "ePXQx0DW-bcM6DODxsM9s0zbWQIDbWafxsywJhtbaRI2mx-btVSzt2jEisld-ck1Qxg75ixHuv8jiGX1ywZkCA"
+          },
+          "body": "{\"items\":[{\"listing_id\":\"listing-1\",\"offer_resource\":{\"asking_amount\":1.25,\"gpu_count\":2,\"resource_schema\":\"vm.v1\"},\"publisher_principals\":{\"identities\":[{\"identifier\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"scheme\":\"ed25519\"}]},\"settlement_options\":[{\"scheme\":\"opaque.v1\"}]}],\"limit\":2,\"offset\":0,\"total\":1}"
+        }
+      },
+      "trust": {
+        "trusted_buyers": { "identities": [{ "scheme": "ed25519", "identifier": "6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw" }] },
+        "trusted_registries": { "identities": [{ "scheme": "ed25519", "identifier": "_RckOFqgx1tk-3jNYC-h2ZH96_drE8WO1wLqyDXp9hg" }] }
+      }
+    },
+    {
+      "scheme": "eip191",
+      "capture": {
+        "schema_version": "hyperai.simple-compute-market.listings-capture.v1",
+        "request": {
+          "protocol": "arkhai.market-request-signature.v2",
+          "role": "buyer",
+          "principal": { "scheme": "eip191", "identifier": "0x4a62316623ad457f02cdc5d997ded67a383ec569" },
+          "method": "GET",
+          "operation": "listing.list",
+          "resource": "listings",
+          "request_id": "source-vector-eip191",
+          "timestamp": 1790281201,
+          "body_hash": "9f1ad01638d14465b533bb4e4781b6adc205f624f0772701a484f2f155654bda",
+          "proof": { "scheme": "eip191", "value": "0x79e7b6751b2453b6f0e2c6155f335dc4f8c4828f82dfab39d477e51085a4414f6c77986a0b530c93731c3eeb569446f428d85432da05b64db48c4831d25e7f311c" }
+        },
+        "request_body": { "query": [["limit", "2"], ["offset", "0"]] },
+        "response": {
+          "status": 200,
+          "headers": {
+            "X-Market-Signature-Version": "arkhai.market-response-signature.v2",
+            "X-Market-Identity-Scheme": "eip191",
+            "X-Market-Identity-Identifier": "0x58da990a8f4a3a6ca7cb6315d68a140105917352",
+            "X-Market-Role": "registry",
+            "X-Market-Request-ID": "source-vector-eip191",
+            "X-Market-Timestamp": "1790281201",
+            "X-Market-Signature": "0x721aebb2e76e2c8ae3e042947602a123c820035d776903bf03e8e17c001898551b049d36160d7e3878f1013bf9b0ccdd05ad6413dd27441a19cc2e17b4a3f07e1c"
+          },
+          "body": "{\"items\":[{\"listing_id\":\"listing-1\",\"offer_resource\":{\"asking_amount\":1.25,\"gpu_count\":2,\"resource_schema\":\"vm.v1\"},\"publisher_principals\":{\"identities\":[{\"identifier\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"scheme\":\"ed25519\"}]},\"settlement_options\":[{\"scheme\":\"opaque.v1\"}]}],\"limit\":2,\"offset\":0,\"total\":1}"
+        }
+      },
+      "trust": {
+        "trusted_buyers": { "identities": [{ "scheme": "eip191", "identifier": "0x4a62316623ad457f02cdc5d997ded67a383ec569" }] },
+        "trusted_registries": { "identities": [{ "scheme": "eip191", "identifier": "0x58da990a8f4a3a6ca7cb6315d68a140105917352" }] }
+      }
+    }
+  ]
+}

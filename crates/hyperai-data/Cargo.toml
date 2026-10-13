@@ -1,0 +1,26 @@
+[package]
+name = "hyperai-data"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+datafusion.workspace = true
+fs2.workspace = true
+futures-util.workspace = true
+hyperai-foundation.workspace = true
+object_store.workspace = true
+serde.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
+sha2.workspace = true
+sqlparser.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

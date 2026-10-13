@@ -1,0 +1,26 @@
+[package]
+name = "hyperai-tui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+test-support = []
+
+[dependencies]
+hyperai-application = { path = "../hyperai-application" }
+hyperai-market = { path = "../hyperai-market" }
+crossterm.workspace = true
+ratatui.workspace = true
+reqwest.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+hyperai-local-service = { path = "../hyperai-local-service" }
+tempfile.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

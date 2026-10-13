@@ -1,0 +1,23 @@
+[package]
+name = "hyperai-application"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+hyperai-foundation.workspace = true
+hyperai-eval = { path = "../hyperai-eval" }
+hyperai-data = { path = "../hyperai-data" }
+hyperai-fleet = { path = "../hyperai-fleet" }
+hyperai-market = { path = "../hyperai-market" }
+hyperai-trade = { path = "../hyperai-trade" }
+hyperai-hyperintel-adapter = { path = "../hyperintel-adapter" }
+hyperai-scm-adapter = { path = "../hyperai-scm-adapter" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

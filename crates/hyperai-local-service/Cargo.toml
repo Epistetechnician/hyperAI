@@ -1,0 +1,48 @@
+[package]
+name = "hyperai-local-service"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+axum.workspace = true
+base64.workspace = true
+clap.workspace = true
+directories.workspace = true
+data-encoding.workspace = true
+fs2.workspace = true
+futures-util.workspace = true
+getrandom.workspace = true
+hyperai-data = { path = "../hyperai-data" }
+hyperai-eval = { path = "../hyperai-eval" }
+hyperai-foundation.workspace = true
+hyperai-application = { path = "../hyperai-application" }
+hyperai-market = { path = "../hyperai-market" }
+hyperai-acp = { path = "../hyperai-acp" }
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
+subtle.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tower.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+data-encoding.workspace = true
+ed25519-dalek.workspace = true
+hyperai-hyperintel-adapter = { path = "../hyperintel-adapter" }
+hyperintel-assurance = { path = "../../products/hyperintel/crates/hyperintel-assurance" }
+hyperintel-core = { path = "../../products/hyperintel/crates/hyperintel-core" }
+hyperintel-execution = { path = "../../products/hyperintel/crates/hyperintel-execution" }
+hyperintel-execution-journal = { path = "../../products/hyperintel/crates/hyperintel-execution-journal" }
+hyperintel-market = { path = "../../products/hyperintel/crates/hyperintel-market" }
+hyperintel-persistence = { path = "../../products/hyperintel/crates/hyperintel-persistence" }
+hyperintel-reconciliation = { path = "../../products/hyperintel/crates/hyperintel-reconciliation" }
+tempfile.workspace = true
+
+[lints]
+workspace = true

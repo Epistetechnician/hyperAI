@@ -1,0 +1,27 @@
+[package]
+name = "hyperai-hyperintel-adapter"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+hyperai-foundation.workspace = true
+hyperintel-assurance = { path = "../../products/hyperintel/crates/hyperintel-assurance" }
+hyperintel-core = { path = "../../products/hyperintel/crates/hyperintel-core" }
+hyperintel-execution = { path = "../../products/hyperintel/crates/hyperintel-execution" }
+hyperintel-execution-journal = { path = "../../products/hyperintel/crates/hyperintel-execution-journal" }
+hyperintel-market = { path = "../../products/hyperintel/crates/hyperintel-market" }
+hyperintel-reconciliation = { path = "../../products/hyperintel/crates/hyperintel-reconciliation" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+data-encoding.workspace = true
+ed25519-dalek.workspace = true
+hyperintel-persistence = { path = "../../products/hyperintel/crates/hyperintel-persistence" }
+tokio.workspace = true
+
+[lints]
+workspace = true
