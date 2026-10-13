@@ -1,0 +1,825 @@
+"""Response and registration models for the Arkhai storefront REST API.
+
+These dataclasses represent the response shapes returned by the
+storefront's HTTP endpoints. They live in ``storefront-client``
+because they are part of the API contract — the same contract
+documented in the versioning policy in ``core/storefront-client/README.md``.
+
+Request builders (``StorefrontListingCreateRequest``, etc.) remain in
+the consuming test project until the full client migration is
+complete.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+from market_identity import Identity
+
+
+def _identity(value: Any) -> Identity | None:
+    if value is None:
+        return None
+    return Identity.model_validate(value)
+
+
+def _required_identity(value: Any, *, field_name: str) -> Identity:
+    identity = _identity(value)
+    if identity is None:
+        raise ValueError(f"{field_name} is required")
+    return identity
+
+
+# ---------------------------------------------------------------------------
+# Listing create response  (POST /listings/create)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class StorefrontListingCreateResponse:
+    """Response from POST /listings/create.
+
+    status values:
+        ``"created"``   — policy accepted; listing_id is set.
+        ``"no_action"`` — policy ran but did not create a listing (no matching policy).
+    """
+
+    status: str | None = None
+    listing_id: str | None = None
+    root_agent_response: str | None = None
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "StorefrontListingCreateResponse":
+        known = {"status", "listing_id", "root_agent_response"}
+        return cls(
+            status=d.get("status"),
+            listing_id=d.get("listing_id"),
+            root_agent_response=d.get("root_agent_response"),
+            extra={k: v for k, v in d.items() if k not in known},
+        )
+
+
+# ---------------------------------------------------------------------------
+# Listing close response  (POST /api/v1/listings/{listing_id}/close)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class StorefrontListingCloseResponse:
+    """Response from POST /api/v1/listings/{listing_id}/close.
+
+    status values: ``"closed"``
+    """
+
+    status: str | None = None
+    listing_id: str | None = None
+    root_agent_response: str | None = None
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "StorefrontListingCloseResponse":
+        known = {"status", "listing_id", "root_agent_response"}
+        return cls(
+            status=d.get("status"),
+            listing_id=d.get("listing_id"),
+            root_agent_response=d.get("root_agent_response"),
+            extra={k: v for k, v in d.items() if k not in known},
+        )
+
+
+# ---------------------------------------------------------------------------
+# Listing refund response  (POST /listings/refund)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class StorefrontListingRefundResponse:
+    """Response from POST /listings/refund."""
+
+    status: str | None = None
+    listing_id: str | None = None
+    refund_tx: str | None = None
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "StorefrontListingRefundResponse":
+        known = {"status", "listing_id", "refund_tx"}
+        return cls(
+            status=d.get("status"),
+            listing_id=d.get("listing_id"),
+            refund_tx=d.get("refund_tx"),
+            extra={k: v for k, v in d.items() if k not in known},
+        )
+
+
+# ---------------------------------------------------------------------------
+# Listing claim response  (POST /listings/claim)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class StorefrontListingClaimResponse:
+    """Response from POST /listings/claim."""
+
+    status: str | None = None
+    listing_id: str | None = None
+    escrow_uid: str | None = None
+    escrow_kind: str | None = None
+    fulfillment_uid: str | None = None
+    collect_result: str | None = None
+    claim_tx: str | None = None
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "StorefrontListingClaimResponse":
+        known = {
+            "status",
+            "listing_id",
+            "escrow_uid",
+            "escrow_kind",
+            "fulfillment_uid",
+            "collect_result",
+            "claim_tx",
+        }
+        return cls(
+            status=d.get("status"),
+            listing_id=d.get("listing_id"),
+            escrow_uid=d.get("escrow_uid"),
+            escrow_kind=d.get("escrow_kind"),
+            fulfillment_uid=d.get("fulfillment_uid"),
+            collect_result=d.get("collect_result"),
+            claim_tx=d.get("claim_tx"),
+            extra={k: v for k, v in d.items() if k not in known},
+        )
+
+# ---------------------------------------------------------------------------
+# Health / system  (GET /health, GET /api/v1/system/status)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class HealthResponse:
+    """Response from GET /health or GET /api/v1/system/health."""
+
+    status: str = "ok"          # "ok" | "degraded"
+    checks: dict[str, str] = field(default_factory=dict)
+    paused: bool | None = None  # present on /api/v1/system/status only
+    agent_id: str | None = None  # canonical eip155:… form; present on /api/v1/system/status
+    chain_id: int | None = None  # EVM chain ID; present on /api/v1/system/status
+    resource_count: int | None = None  # registered compute resources; present on /api/v1/system/status
+    site_projections: dict[str, Any] | None = None  # per-site/family projection load state; present on /api/v1/system/status
+    listing_mode_explanations: dict[str, Any] | None = None  # per-site/pool listing_mode fallback reasons; present on /api/v1/system/status
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "HealthResponse":
+        known = {
+            "status", "checks", "paused", "agent_id", "chain_id",
+            "resource_count", "site_projections", "listing_mode_explanations",
+        }
+        raw_chain_id = d.get("chain_id")
+        raw_resource_count = d.get("resource_count")
+        return cls(
+            status=d.get("status", "ok"),
+            checks=d.get("checks", {}),
+            paused=d.get("paused"),
+            agent_id=d.get("agent_id"),
+            chain_id=int(raw_chain_id) if raw_chain_id is not None else None,
+            resource_count=int(raw_resource_count) if raw_resource_count is not None else None,
+            site_projections=d.get("site_projections"),
+            listing_mode_explanations=d.get("listing_mode_explanations"),
+            extra={k: v for k, v in d.items() if k not in known},
+        )
+
+
+# ---------------------------------------------------------------------------
+# Listings API  (GET /api/v1/listings, GET /api/v1/listings/{id})
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ListingSummary:
+    """A single row from GET /api/v1/listings or GET /api/v1/listings/{id}."""
+
+    listing_id: str = ""
+    status: str = ""
+    paused: bool = False
+    max_duration_seconds: int | None = None
+    seller: str = ""
+    buyer: str | None = None
+    escrow_uid: str | None = None
+    created_at: str = ""
+    updated_at: str = ""
+    offer_resource: dict[str, Any] = field(default_factory=dict)
+    demand_resource: dict[str, Any] = field(default_factory=dict)
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "ListingSummary":
+        import json as _json
+
+        def _parse_resource(v: Any) -> dict[str, Any]:
+            if isinstance(v, dict):
+                return v
+            if isinstance(v, str):
+                try:
+                    return _json.loads(v)
+                except Exception:
+                    return {}
+            return {}
+
+        known = {
+            "listing_id", "status", "paused", "max_duration_seconds", "seller",
+            "buyer", "escrow_uid", "created_at", "updated_at",
+            "offer_resource", "demand_resource",
+        }
+        max_dur = d.get("max_duration_seconds")
+        return cls(
+            listing_id=d.get("listing_id", ""),
+            status=d.get("status", ""),
+            paused=bool(d.get("paused", False)),
+            max_duration_seconds=int(max_dur) if max_dur is not None else None,
+            seller=d.get("seller", ""),
+            buyer=d.get("buyer"),
+            escrow_uid=d.get("escrow_uid"),
+            created_at=d.get("created_at", ""),
+            updated_at=d.get("updated_at", ""),
+            offer_resource=_parse_resource(d.get("offer_resource")),
+            demand_resource=_parse_resource(d.get("demand_resource")),
+            extra={k: v for k, v in d.items() if k not in known},
+        )
+
+
+@dataclass
+class ListingListResponse:
+    """Response from GET /api/v1/listings."""
+
+    listings: list[ListingSummary] = field(default_factory=list)
+    count: int = 0
+    limit: int = 50
+    offset: int = 0
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "ListingListResponse":
+        known = {"listings", "count", "limit", "offset"}
+        return cls(
+            listings=[ListingSummary.from_dict(o) for o in d.get("listings", [])],
+            count=d.get("count", 0),
+            limit=d.get("limit", 50),
+            offset=d.get("offset", 0),
+            extra={k: v for k, v in d.items() if k not in known},
+        )
+
+
+@dataclass
+class ListingPauseResponse:
+    """Response from POST /api/v1/listings/{id}/pause or /resume."""
+
+    listing_id: str = ""
+    paused: bool = False
+    registry_status: str = ""   # "published" | "disabled" | "error" | "" (absent on pause)
+    message: str = ""
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "ListingPauseResponse":
+        known = {"listing_id", "paused", "registry_status", "message"}
+        return cls(
+            listing_id=d.get("listing_id", ""),
+            paused=bool(d.get("paused", False)),
+            registry_status=d.get("registry_status", ""),
+            message=d.get("message", ""),
+            extra={k: v for k, v in d.items() if k not in known},
+        )
+
+
+# ---------------------------------------------------------------------------
+# Stage events  (GET /api/v1/system/events)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class StageEvent:
+    """A single row from the stage_events table."""
+
+    id: int = 0
+    ts: str = ""
+    stage: str = ""
+    event: str = ""
+    negotiation_id: str | None = None
+    listing_id: str | None = None
+    escrow_uid: str | None = None
+    data: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "StageEvent":
+        known = {"id", "ts", "stage", "event", "negotiation_id", "listing_id", "escrow_uid", "data"}
+        return cls(
+            id=int(d.get("id", 0)),
+            ts=d.get("ts", ""),
+            stage=d.get("stage", ""),
+            event=d.get("event", ""),
+            negotiation_id=d.get("negotiation_id"),
+            listing_id=d.get("listing_id"),
+            escrow_uid=d.get("escrow_uid"),
+            data=d.get("data", {}),
+        )
+
+
+@dataclass
+class StageEventListResponse:
+    """Response from GET /api/v1/system/events (non-streaming)."""
+
+    events: list[StageEvent] = field(default_factory=list)
+    count: int = 0
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "StageEventListResponse":
+        return cls(
+            events=[StageEvent.from_dict(e) for e in d.get("events", [])],
+            count=d.get("count", 0),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Negotiations API
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class NegotiationMessage:
+    """A scheme-tagged round message in a negotiation thread."""
+
+    round: int = 0
+    sender_role: str = ""
+    sender_principal: Identity | None = None
+    action_taken: str = ""
+    proposed_amount: int | None = None
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "NegotiationMessage":
+        known = {
+            "round",
+            "sender_role",
+            "sender_principal",
+            "action_taken",
+            "proposed_amount",
+        }
+        return cls(
+            round=int(d.get("round", 0)),
+            sender_role=d.get("sender_role", ""),
+            sender_principal=_identity(d.get("sender_principal")),
+            action_taken=d.get("action_taken", ""),
+            proposed_amount=(
+                int(d["proposed_amount"])
+                if d.get("proposed_amount") is not None
+                else None
+            ),
+            extra={k: v for k, v in d.items() if k not in known},
+        )
+
+
+@dataclass
+class NegotiationSummary:
+    """A single row from GET /api/v1/listings/{id}/negotiations."""
+
+    negotiation_id: str = ""
+    our_listing_id: str = ""
+    their_agent_id: str | None = None
+    buyer_principal: Identity | None = None
+    seller_principal: Identity | None = None
+    terminal_state: str | None = None
+    agreed_amount: int | None = None
+    round_count: int = 0
+    created_at: str | None = None
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "NegotiationSummary":
+        known = {
+            "negotiation_id",
+            "our_listing_id",
+            "their_agent_id",
+            "buyer_principal",
+            "seller_principal",
+            "terminal_state",
+            "agreed_amount",
+            "round_count",
+            "created_at",
+        }
+        return cls(
+            negotiation_id=d.get("negotiation_id", ""),
+            our_listing_id=d.get("our_listing_id", ""),
+            their_agent_id=d.get("their_agent_id"),
+            buyer_principal=_identity(d.get("buyer_principal")),
+            seller_principal=_identity(d.get("seller_principal")),
+            terminal_state=d.get("terminal_state"),
+            agreed_amount=(
+                int(d["agreed_amount"])
+                if d.get("agreed_amount") is not None
+                else None
+            ),
+            round_count=int(d.get("round_count", 0)),
+            created_at=d.get("created_at"),
+            extra={k: v for k, v in d.items() if k not in known},
+        )
+
+
+@dataclass
+class NegotiationListResponse:
+    """Response from GET /api/v1/listings/{id}/negotiations."""
+
+    listing_id: str = ""
+    negotiations: list[NegotiationSummary] = field(default_factory=list)
+    count: int = 0
+    limit: int = 50
+    offset: int = 0
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "NegotiationListResponse":
+        known = {"listing_id", "negotiations", "count", "limit", "offset"}
+        return cls(
+            listing_id=d.get("listing_id", ""),
+            negotiations=[NegotiationSummary.from_dict(n) for n in d.get("negotiations", [])],
+            count=d.get("count", 0),
+            limit=d.get("limit", 50),
+            offset=d.get("offset", 0),
+            extra={k: v for k, v in d.items() if k not in known},
+        )
+
+
+@dataclass
+class NegotiationDetail:
+    """Response from GET /api/v1/listings/{id}/negotiations/{neg_id}."""
+
+    negotiation_id: str = ""
+    our_listing_id: str = ""
+    their_agent_id: str | None = None
+    buyer_principal: Identity | None = None
+    seller_principal: Identity | None = None
+    terminal_state: str | None = None
+    agreed_amount: int | None = None
+    round_count: int = 0
+    messages: list[NegotiationMessage] = field(default_factory=list)
+    stage_events: list[dict[str, Any]] = field(default_factory=list)
+    escrows: list[dict[str, Any]] = field(default_factory=list)
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "NegotiationDetail":
+        known = {
+            "negotiation_id",
+            "our_listing_id",
+            "their_agent_id",
+            "buyer_principal",
+            "seller_principal",
+            "terminal_state",
+            "agreed_amount",
+            "round_count",
+            "messages",
+            "stage_events",
+            "escrows",
+        }
+        return cls(
+            negotiation_id=d.get("negotiation_id", ""),
+            our_listing_id=d.get("our_listing_id", ""),
+            their_agent_id=d.get("their_agent_id"),
+            buyer_principal=_identity(d.get("buyer_principal")),
+            seller_principal=_identity(d.get("seller_principal")),
+            terminal_state=d.get("terminal_state"),
+            agreed_amount=(
+                int(d["agreed_amount"])
+                if d.get("agreed_amount") is not None
+                else None
+            ),
+            round_count=int(d.get("round_count", 0)),
+            messages=[
+                NegotiationMessage.from_dict(message)
+                for message in d.get("messages", [])
+            ],
+            stage_events=d.get("stage_events", []),
+            escrows=d.get("escrows", []),
+            extra={k: v for k, v in d.items() if k not in known},
+        )
+
+
+@dataclass
+class NegotiationActionResponse:
+    """Response from POST .../advance or .../force-accept.
+
+    ``proposal`` is the full EscrowProposal-shaped dict returned by the
+    seller's counter / accept decisions (with ``fields["amount"]``
+    carrying the absolute amount in base units). ``amount`` is the
+    convenience scalar returned by force-accept.
+    """
+
+    neg_id: str = ""
+    listing_id: str = ""
+    action: str = ""
+    proposal: dict[str, Any] | None = None
+    amount: int | None = None
+    reason: str | None = None
+    source: str | None = None
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "NegotiationActionResponse":
+        known = {"neg_id", "listing_id", "action", "proposal", "amount", "reason", "source"}
+        return cls(
+            neg_id=d.get("neg_id", ""),
+            listing_id=d.get("listing_id", ""),
+            action=d.get("action", ""),
+            proposal=d.get("proposal"),
+            amount=int(d["amount"]) if d.get("amount") is not None else None,
+            reason=d.get("reason"),
+            source=d.get("source"),
+            extra={k: v for k, v in d.items() if k not in known},
+        )
+
+
+# ---------------------------------------------------------------------------
+# Admin API  (POST /admin/pause, GET /admin/status)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class IdentityBindingStatusResponse:
+    """One principal binding in an identity rotation status response."""
+
+    principal: Identity
+    status: str
+    active: bool
+    overlap_until: int | None = None
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "IdentityBindingStatusResponse":
+        return cls(
+            principal=_required_identity(
+                d.get("principal"), field_name="binding principal"
+            ),
+            status=d["status"],
+            overlap_until=(
+                int(d["overlap_until"])
+                if d.get("overlap_until") is not None
+                else None
+            ),
+            active=d["active"],
+        )
+
+
+@dataclass
+class IdentitySubjectStatusResponse:
+    """Current primary, overlap, disabled, and retired bindings for one subject."""
+
+    authority: str
+    subject: str
+    role: str
+    primary: Identity
+    observed_at: int
+    bindings: list[IdentityBindingStatusResponse] = field(default_factory=list)
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "IdentitySubjectStatusResponse":
+        known = {
+            "authority",
+            "subject",
+            "role",
+            "bindings",
+            "primary",
+            "observed_at",
+        }
+        return cls(
+            authority=d["authority"],
+            subject=d["subject"],
+            role=d["role"],
+            bindings=[
+                IdentityBindingStatusResponse.from_dict(binding)
+                for binding in d.get("bindings", [])
+            ],
+            extra={key: value for key, value in d.items() if key not in known},
+            primary=_required_identity(
+                d.get("primary"), field_name="primary"
+            ),
+            observed_at=int(d["observed_at"]),
+        )
+
+
+@dataclass
+class AdminPauseResponse:
+    """Response from POST /admin/pause or /admin/resume."""
+
+    paused: bool = False
+    message: str = ""
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "AdminPauseResponse":
+        known = {"paused", "message"}
+        return cls(
+            paused=bool(d.get("paused", False)),
+            message=d.get("message", ""),
+            extra={k: v for k, v in d.items() if k not in known},
+        )
+
+
+@dataclass
+class ReleaseReservationsResponse:
+    """Response from POST /api/v1/admin/portfolio/release-reservations."""
+
+    released_count: int = 0
+    resource_ids: list[str] = field(default_factory=list)
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "ReleaseReservationsResponse":
+        known = {"released_count", "resource_ids"}
+        return cls(
+            released_count=int(d.get("released_count", 0)),
+            resource_ids=list(d.get("resource_ids", []) or []),
+            extra={k: v for k, v in d.items() if k not in known},
+        )
+
+
+@dataclass
+class ReserveCapacityResponse:
+    """Response from POST /api/v1/admin/portfolio/reservations."""
+
+    capacity_reservation_id: str = ""
+    pool_id: str | None = None
+    member_id: str | None = None
+    resource_id: str = ""
+    gpu_count: int = 0
+    resource_state: str | None = None
+    closed_listing_ids: list[str] = field(default_factory=list)
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "ReserveCapacityResponse":
+        known = {
+            "capacity_reservation_id",
+            "pool_id",
+            "member_id",
+            "resource_id",
+            "gpu_count",
+            "resource_state",
+            "closed_listing_ids",
+        }
+        return cls(
+            capacity_reservation_id=str(d.get("capacity_reservation_id") or ""),
+            pool_id=d.get("pool_id"),
+            member_id=d.get("member_id"),
+            resource_id=str(d.get("resource_id") or ""),
+            gpu_count=int(d.get("gpu_count") or 0),
+            resource_state=d.get("resource_state"),
+            closed_listing_ids=list(d.get("closed_listing_ids") or []),
+            extra={k: v for k, v in d.items() if k not in known},
+        )
+
+
+@dataclass
+class EvaluateNegotiateResponse:
+    """Response from POST /api/v1/admin/listings/{listing_id}/evaluate-negotiate."""
+
+    listing_id: str = ""
+    our_reference_amount: int = 0
+    their_proposed_amount: int = 0
+    direction: str = ""
+    strategy: str = ""
+    decision: str = ""
+    decision_amount: int | None = None
+    decision_proposal: dict[str, Any] | None = None
+    decision_reason: str | None = None
+    would_negotiate: bool = False
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "EvaluateNegotiateResponse":
+        known = {
+            "listing_id", "our_reference_amount", "their_proposed_amount",
+            "direction", "strategy", "decision", "decision_amount",
+            "decision_proposal", "decision_reason", "would_negotiate",
+        }
+        return cls(
+            listing_id=d.get("listing_id", ""),
+            our_reference_amount=int(d.get("our_reference_amount", 0)),
+            their_proposed_amount=int(d.get("their_proposed_amount", 0)),
+            direction=d.get("direction", ""),
+            strategy=d.get("strategy", ""),
+            decision=d.get("decision", ""),
+            decision_amount=int(d["decision_amount"]) if d.get("decision_amount") is not None else None,
+            decision_proposal=d.get("decision_proposal"),
+            decision_reason=d.get("decision_reason"),
+            would_negotiate=bool(d.get("would_negotiate", False)),
+            extra={k: v for k, v in d.items() if k not in known},
+        )
+
+
+@dataclass
+class SettleResponse:
+    """Response from POST /api/v1/settle/{escrow_uid}."""
+
+    status: str = ""
+    escrow_uid: str = ""
+    buyer_principal: Identity | None = None
+    seller_principal: Identity | None = None
+    provisioning_job_id: str | None = None
+    fulfillment_id: str | None = None
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "SettleResponse":
+        known = {
+            "status",
+            "escrow_uid",
+            "buyer_principal",
+            "seller_principal",
+            "provisioning_job_id",
+            "fulfillment_id",
+        }
+        return cls(
+            status=d.get("status", ""),
+            escrow_uid=d.get("escrow_uid", ""),
+            buyer_principal=_identity(d.get("buyer_principal")),
+            seller_principal=_identity(d.get("seller_principal")),
+            provisioning_job_id=d.get("provisioning_job_id"),
+            fulfillment_id=d.get("fulfillment_id"),
+            extra={k: v for k, v in d.items() if k not in known},
+        )
+
+
+@dataclass
+class SettleStatusResponse:
+    """Response from GET /api/v1/settle/{escrow_uid}/status."""
+
+    status: str = ""
+    escrow_uid: str = ""
+    buyer_principal: Identity | None = None
+    seller_principal: Identity | None = None
+    fulfillment_id: str | None = None
+    provisioning_job_id: str | None = None
+    tenant_credentials: dict[str, Any] | None = None
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "SettleStatusResponse":
+        known = {
+            "status",
+            "escrow_uid",
+            "buyer_principal",
+            "seller_principal",
+            "fulfillment_id",
+            "provisioning_job_id",
+            "tenant_credentials",
+        }
+        creds = d.get("tenant_credentials")
+        return cls(
+            status=d.get("status", ""),
+            escrow_uid=d.get("escrow_uid", ""),
+            buyer_principal=_identity(d.get("buyer_principal")),
+            seller_principal=_identity(d.get("seller_principal")),
+            fulfillment_id=d.get("fulfillment_id"),
+            provisioning_job_id=d.get("provisioning_job_id"),
+            tenant_credentials=dict(creds) if isinstance(creds, dict) else None,
+            extra={k: v for k, v in d.items() if k not in known},
+        )
+
+
+@dataclass
+class SettleWaitResponse:
+    """Response from GET /api/v1/admin/settle/{escrow_uid}/wait."""
+
+    ready: bool = False
+    status: str = ""
+    provisioning_job_id: str | None = None
+    elapsed_ms: int = 0
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "SettleWaitResponse":
+        return cls(
+            ready=bool(d.get("ready", False)),
+            status=str(d.get("status", "")),
+            provisioning_job_id=d.get("provisioning_job_id"),
+            elapsed_ms=int(d.get("elapsed_ms", 0)),
+        )
+
+
+@dataclass
+class ImportResourcesResponse:
+    """Response from POST /api/v1/admin/portfolio/resources/import."""
+
+    imported_count: int = 0
+    failed_count: int = 0
+    total_rows: int = 0
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "ImportResourcesResponse":
+        return cls(
+            imported_count=int(d.get("imported_count", 0)),
+            failed_count=int(d.get("failed_count", 0)),
+            total_rows=int(d.get("total_rows", 0)),
+        )

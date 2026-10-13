@@ -1,0 +1,3 @@
+locator-only snapshot
+url=https://openai.com/index/hugging-face-incident-and-the-road-ahead/
+external content intentionally not mirrored in v1.

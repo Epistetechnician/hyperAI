@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+
+toolchain="1.93.1"
+cargo_bin="$(rustup which --toolchain "${toolchain}" cargo)"
+rustc_bin="$(rustup which --toolchain "${toolchain}" rustc)"
+toolchain_bin="$(dirname "${cargo_bin}")"
+
+PATH="${toolchain_bin}:${PATH}" RUSTC="${rustc_bin}" exec "${cargo_bin}" "$@"

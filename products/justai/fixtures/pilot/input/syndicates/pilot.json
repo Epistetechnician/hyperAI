@@ -1,0 +1,20 @@
+{
+  "schema": "justai.syndicate.v1",
+  "record_id": "syndicate-pilot-manifest",
+  "state_slice": "justai-federation-charter-v1",
+  "status": "Declared",
+  "claim_ceiling": "identity-and-role-description-only",
+  "created_at": "2026-09-09T12:00:00Z",
+  "publisher_id": "justai-pilot-syndicate",
+  "source_digests": [],
+  "content_digest": "",
+  "signature_refs": [],
+  "syndicate_id": "justai-pilot-syndicate",
+  "syndicate_name": "JustAI development pilot syndicate",
+  "jurisdiction": "US",
+  "roles": ["observatory", "review-coordination"],
+  "public_key": "3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29",
+  "charter_version": "justai-federation-charter-v1",
+  "funding_disclosure": "No funding represented by this development fixture.",
+  "conflict_disclosure": "No organizational conflict represented by this development fixture."
+}

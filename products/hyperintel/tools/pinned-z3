@@ -1,0 +1,19 @@
+#!/bin/sh
+set -eu
+
+expected_version='Z3 version 4.15.0 - 64 bit'
+solver_path=${HYPERINTEL_Z3:-}
+if [ -z "$solver_path" ]; then
+  solver_path=$(command -v z3 || true)
+fi
+if [ -z "$solver_path" ] || [ ! -x "$solver_path" ]; then
+  echo 'pinned-z3: Z3 4.15.0 executable is required' >&2
+  exit 127
+fi
+actual_version=$("$solver_path" --version)
+if [ "$actual_version" != "$expected_version" ]; then
+  echo "pinned-z3: expected '$expected_version', found '$actual_version'" >&2
+  exit 1
+fi
+
+exec "$solver_path" "$@"

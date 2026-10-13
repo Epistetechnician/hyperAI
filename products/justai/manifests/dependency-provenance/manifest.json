@@ -1,0 +1,16 @@
+{
+  "schema": "justai.dependency_provenance.v1",
+  "state_slice": "justai-contracts-v1",
+  "canonical_owner": "crates/justai-contracts",
+  "runtime_dependencies": [
+    {"name": "serde", "purpose": "typed data serialization", "license": "MIT OR Apache-2.0"},
+    {"name": "serde_json", "purpose": "JSON value transport", "license": "MIT OR Apache-2.0"},
+    {"name": "serde_jcs", "purpose": "RFC 8785 canonical JSON", "license": "MIT OR Apache-2.0"},
+    {"name": "sha2", "purpose": "SHA-256 digests", "license": "MIT OR Apache-2.0"},
+    {"name": "hex", "purpose": "lowercase digest/key encoding", "license": "MIT OR Apache-2.0"},
+    {"name": "ed25519-dalek", "purpose": "Ed25519 verification", "license": "BSD-3-Clause"},
+    {"name": "thiserror", "purpose": "typed fail-closed errors", "license": "MIT OR Apache-2.0"}
+  ],
+  "external_source_code": [],
+  "rights_status": "source rights and upstream licenses are not transferred by this manifest"
+}

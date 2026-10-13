@@ -1,0 +1,23 @@
+{
+  "schema": "justai.incident.v1",
+  "record_id": "incident-pilot-001",
+  "state_slice": "justai-public-observatory-v1",
+  "status": "Unknown",
+  "claim_ceiling": "locator-only-development-pilot",
+  "created_at": "2026-09-09T12:00:00Z",
+  "publisher_id": "justai-pilot-syndicate",
+  "source_digests": ["c5482d3fb7f3d7dc355568ff8a91be49eae144259ecc3443680a108cde472c4b"],
+  "content_digest": "",
+  "signature_refs": [],
+  "system_id": "pilot-locator-demo-system",
+  "operator_id": "pilot-locator-demo-operator",
+  "occurred_at": "Not asserted in locator-only pilot",
+  "environment": "No execution; locator-only fixture",
+  "observed_action": "No operational action asserted; this record demonstrates schema handling.",
+  "harm_status": "Unknown",
+  "affected_parties": ["Not assessed in locator-only pilot"],
+  "reproducibility": "Not assessed",
+  "response": "No response assessed",
+  "disclosure_state": "Not applicable",
+  "review_receipt_refs": ["review-incident-a", "review-incident-b"]
+}

@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://justai.org/schemas/justai.v1/source.schema.json",
+  "title": "JustAI public source record",
+  "$ref": "envelope.schema.json",
+  "allOf": [
+    {
+      "type": "object",
+      "required": [
+        "title", "url", "accessed_at", "publication_date", "jurisdiction",
+        "source_class", "license_or_terms", "access_class", "custody_mode",
+        "license_basis", "custodian_id", "acquisition_timestamp", "permitted_uses",
+        "retention_and_disclosure_rules", "snapshot_status"
+      ],
+      "properties": {
+        "schema": {"const": "justai.source.v1"},
+        "title": {"type": "string", "minLength": 1},
+        "url": {"type": "string", "format": "uri"},
+        "accessed_at": {"type": "string", "format": "date-time"},
+        "publication_date": {"type": "string", "format": "date"},
+        "jurisdiction": {"type": "string", "minLength": 1},
+        "source_class": {
+          "enum": ["primary", "independent", "institutional", "community", "secondary"]
+        },
+        "license_or_terms": {"type": "string", "minLength": 1},
+        "access_class": {"enum": ["public", "restricted", "protected"]},
+        "custody_mode": {"enum": ["reproducible", "attested", "corroborated", "unknown"]},
+        "license_basis": {"type": "string", "minLength": 1},
+        "custodian_id": {"type": "string", "minLength": 1},
+        "acquisition_timestamp": {"type": "string", "format": "date-time"},
+        "permitted_uses": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1},
+        "retention_and_disclosure_rules": {"type": "string", "minLength": 1},
+        "snapshot_status": {"type": "string", "minLength": 1}
+      }
+    }
+  ]
+}

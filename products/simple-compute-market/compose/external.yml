@@ -1,0 +1,28 @@
+# External layer: the EVM chain and deployed contracts.
+#
+# In production, this layer is NOT run by anyone in this repo — it's the
+# real chain (Ethereum, Base, etc.) with the Alkahest contracts already
+# deployed by someone else.
+#
+# For local development and testing, we provide a test chain (Anvil) with
+# the Alkahest contracts pre-baked into the image's state snapshot
+# (dev-env/state/state.json). Real users can ignore this file.
+#
+# Usage:
+#   docker compose -f compose/external.yml up       # start the test chain
+#   docker compose -f compose/external.yml down     # tear down
+
+services:
+  anvil:
+    image: arkhai:dev-env
+    container_name: anvil
+    ports:
+      - "8545:8545"
+    environment:
+      - ANVIL_IP_ADDR=0.0.0.0
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -X POST http://localhost:8545 -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"method\":\"eth_blockNumber\",\"params\":[],\"id\":1}' | grep -q result || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s

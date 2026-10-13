@@ -1,0 +1,20 @@
+{
+  "schema": "justai.claim_projection.v1",
+  "record_id": "projection-restricted-demo",
+  "state_slice": "justai-evidence-bridge-v1",
+  "status": "Published",
+  "claim_ceiling": "bounded-observation-only",
+  "created_at": "2026-09-09T12:00:00Z",
+  "publisher_id": "justai-pilot-syndicate",
+  "source_digests": ["2222222222222222222222222222222222222222222222222222222222222222"],
+  "content_digest": "",
+  "signature_refs": [],
+  "evidence_refs": ["evaluation-restricted-demo"],
+  "public_summary": "The synthetic restricted lane completed a bounded evaluation under attested custody; only a public-safe aggregate is projected.",
+  "uncertainty": "The restricted artifact and its raw observations are not independently reproducible from public materials.",
+  "nonclaims": ["not a universal safety claim", "not evidence of general misalignment", "not independently reproducible from public materials"],
+  "missing_information": "Raw evidence, identifying details, and any sensitive operational detail are withheld.",
+  "contestation": "The projection remains contestable and can be superseded by a reviewed correction.",
+  "disclosure_decision_refs": ["disclosure-restricted-demo"],
+  "review_receipt_refs": ["review-restricted-projection-a", "review-restricted-projection-b"]
+}

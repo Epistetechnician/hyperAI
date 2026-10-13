@@ -1,0 +1,109 @@
+{{- $itValues := dict -}}
+{{- if .Values.global -}}
+  {{- $itValues = .Values.global.integrationTests | default dict -}}
+{{- end -}}
+{{- $rootIt := ((.Values).integrationTests) | default dict -}}
+{{- $tests := .Values.tests | default dict -}}
+{{- $itRepo := $rootIt.repository | default ($itValues.repository | default "") -}}
+{{- if and (not $itRepo) .Values.global -}}
+  {{- $itRepo = .Values.global.imageRepository | default "" -}}
+{{- end -}}
+{{- $itName := $rootIt.name | default ($itValues.name | default "arkhai") -}}
+{{- $itTag := $rootIt.tag | default ($itValues.tag | default "e2e-tests") -}}
+{{- $itDigest := $rootIt.digest | default ($itValues.digest | default "") -}}
+{{- $itPull := $rootIt.pullPolicy | default ($itValues.pullPolicy | default "IfNotPresent") -}}
+{{- $itImageName := $itName -}}
+{{- if $itRepo -}}
+  {{- $itImageName = printf "%s/%s" $itRepo $itName -}}
+{{- end -}}
+{{- $itImage := printf "%s:%s" $itImageName $itTag -}}
+{{- if $itDigest -}}
+  {{- $itImage = printf "%s@%s" $itImageName $itDigest -}}
+{{- end -}}
+{{- if not .Values.agents -}}
+  {{- fail "storefront smoke test requires at least one configured agent" -}}
+{{- end -}}
+{{- $targetName := $tests.targetAgentName | default "" -}}
+{{- $targetAgent := first .Values.agents -}}
+{{- if $targetName -}}
+  {{- $found := false -}}
+  {{- range $agent := .Values.agents -}}
+    {{- if eq $agent.name $targetName -}}
+      {{- $targetAgent = $agent -}}
+      {{- $found = true -}}
+    {{- end -}}
+  {{- end -}}
+  {{- if not $found -}}
+    {{- fail (printf "storefront smoke test targetAgentName %q did not match any agent" $targetName) -}}
+  {{- end -}}
+{{- end -}}
+{{- $component := $targetAgent.component | default $targetAgent.name -}}
+{{- $agentSecret := $targetAgent.secret | default dict -}}
+{{- $secretName := $tests.secretName | default ($agentSecret.secretName | default "") -}}
+{{- $hasSelectedSecret := ne $secretName "" -}}
+{{- $globalSecretEnabled := false -}}
+{{- if and .Values.global .Values.global.smokeTests .Values.global.smokeTests.secret -}}
+  {{- $globalSecretEnabled = .Values.global.smokeTests.secret.enabled | default false -}}
+{{- end -}}
+{{- $profiles := $tests.activeProfiles | default "" -}}
+{{- if not $profiles -}}
+  {{- if $globalSecretEnabled -}}
+    {{- $profiles = include "storefront.smokeTestActiveProfiles" . -}}
+  {{- else -}}
+    {{- $profileList := list -}}
+    {{- $configProfiles := include "storefront.smokeTestConfigProfiles" . -}}
+    {{- if $configProfiles -}}
+      {{- range $profile := splitList "," $configProfiles -}}
+        {{- $profileList = append $profileList $profile -}}
+      {{- end -}}
+    {{- end -}}
+    {{- if $hasSelectedSecret -}}
+    {{- $profileList = append $profileList (printf "%s-secret" $component) -}}
+    {{- end -}}
+    {{- $profiles = join "," $profileList -}}
+  {{- end -}}
+{{- end -}}
+{{- $secretKey := $tests.secretKey | default (printf "config-%s-secret.yml" $component) -}}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "storefront.fullname" . }}-smoke-test
+  labels:
+    {{- include "storefront.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  restartPolicy: Never
+  containers:
+    - name: {{ include "storefront.fullname" . }}-smoke-test
+      image: {{ $itImage }}
+      imagePullPolicy: {{ $itPull }}
+      command:
+        - .venv/bin/pytest
+        - -m
+        - storefront
+      env:
+        - name: ACTIVE_PROFILES
+          value: {{ $profiles | quote }}
+      volumeMounts:
+        {{- include "storefront.smokeTestConfigVolumeMounts" . | nindent 8 }}
+        {{- if $globalSecretEnabled }}
+        {{- include "storefront.smokeTestSecretVolumeMounts" . | nindent 8 }}
+        {{- else if $hasSelectedSecret }}
+        - name: selected-storefront-secret-config
+          mountPath: /app/config/{{ $secretKey }}
+          subPath: {{ $secretKey }}
+          readOnly: true
+        {{- end }}
+  volumes:
+    - name: test-config
+      configMap:
+        name: {{ .Release.Name }}-test-config
+    {{- if $globalSecretEnabled }}
+    {{- include "storefront.smokeTestSecretVolume" . | nindent 4 }}
+    {{- else if $hasSelectedSecret }}
+    - name: selected-storefront-secret-config
+      secret:
+        secretName: {{ $secretName }}
+    {{- end }}

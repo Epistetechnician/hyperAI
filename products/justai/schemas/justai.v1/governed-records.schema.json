@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://justai.org/schemas/justai.v1/governed-records.schema.json",
+  "title": "JustAI governed discovery records",
+  "description": "Pure-data records for the proposal, serendipity, intuition, validation, disposition, and retrospective loop.",
+  "oneOf": [
+    {"$ref": "#/$defs/decision"},
+    {"$ref": "#/$defs/serendipity"},
+    {"$ref": "#/$defs/intuition"},
+    {"$ref": "#/$defs/dissent"},
+    {"$ref": "#/$defs/promotion"},
+    {"$ref": "#/$defs/unknown"},
+    {"$ref": "#/$defs/evidence"},
+    {"$ref": "#/$defs/integration"},
+    {"$ref": "#/$defs/handoffSeal"}
+  ],
+  "$defs": {
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_repository", "source_commit", "source_path", "source_digest", "license_basis", "custody_ref"],
+      "properties": {
+        "source_repository": {"type": "string", "minLength": 1},
+        "source_commit": {"type": "string", "minLength": 1},
+        "source_path": {"type": "string", "pattern": "^(?!/)(?!.*\\.\\.).+"},
+        "source_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "license_basis": {"type": "string", "minLength": 1},
+        "custody_ref": {"type": "string", "minLength": 1}
+      }
+    },
+    "governance": {
+      "type": "object",
+      "required": ["state_slice", "proposal_digest", "claim_ceiling", "provenance", "disposition", "evidence_refs", "content_digest"],
+      "properties": {
+        "state_slice": {"type": "string", "pattern": "^justai-[a-z0-9-]+$"},
+        "proposal_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "claim_ceiling": {"type": "string", "minLength": 1},
+        "provenance": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/provenance"}},
+        "disposition": {"type": "string", "minLength": 1},
+        "evidence_refs": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "content_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "base": {
+      "allOf": [
+        {"$ref": "#/$defs/governance"},
+        {"type": "object", "required": ["schema", "record_id", "created_at"], "properties": {"schema": {"type": "string"}, "record_id": {"type": "string", "minLength": 1}, "created_at": {"type": "string", "minLength": 1}}}
+      ]
+    },
+    "decision": {
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {"type": "object", "properties": {"schema": {"const": "justai.decision.v1"}, "algorithmic_proposal": {"type": "string", "minLength": 1}, "model_role": {"const": "proposal-only"}, "reversible": {"type": "boolean"}, "confidence": {"type": "integer", "minimum": 0, "maximum": 100}, "alternative_refs": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}, "requested_action": {"type": "string", "minLength": 1}}, "required": ["algorithmic_proposal", "model_role", "reversible", "confidence", "alternative_refs", "requested_action"]}
+      ],
+      "unevaluatedProperties": false
+    },
+    "serendipity": {
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {"type": "object", "properties": {"schema": {"const": "justai.serendipity.v1"}, "sampling_method": {"type": "string", "minLength": 1}, "candidate_refs": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}, "preserved_alternatives": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}, "candidate_digests": {"type": "array", "minItems": 1, "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}, "budget": {"type": "string", "minLength": 1}, "selected_candidate_ref": {"type": ["string", "null"]}}, "required": ["sampling_method", "candidate_refs", "preserved_alternatives", "candidate_digests", "budget", "selected_candidate_ref"]}
+      ],
+      "unevaluatedProperties": false
+    },
+    "intuition": {
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {"type": "object", "properties": {"schema": {"const": "justai.intuition_review.v1"}, "hypothesis": {"type": "string", "minLength": 1}, "confidence": {"type": "integer", "minimum": 0, "maximum": 100}, "observed_evidence": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}, "rejected_alternatives": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}, "recommended_action_or_restraint": {"type": "string", "minLength": 1}, "reviewer_identity": {"type": "string", "minLength": 1}, "later_outcome": {"type": ["string", "null"]}, "intuition_added_value": {"type": ["boolean", "null"]}, "human_disposition": {"enum": ["promote", "unknown", "quarantine", null]}}, "required": ["hypothesis", "confidence", "observed_evidence", "rejected_alternatives", "recommended_action_or_restraint", "reviewer_identity", "later_outcome", "intuition_added_value", "human_disposition"]}
+      ],
+      "unevaluatedProperties": false
+    },
+    "dissent": {
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {"type": "object", "properties": {"schema": {"const": "justai.dissent.v1"}, "dissenting_reviewer": {"type": "string", "minLength": 1}, "reason": {"type": "string", "minLength": 1}, "alternatives_preserved": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}, "resolution": {"type": ["string", "null"]}, "resolution_evidence_refs": {"type": "array", "items": {"type": "string", "minLength": 1}}}, "required": ["dissenting_reviewer", "reason", "alternatives_preserved", "resolution", "resolution_evidence_refs"]}
+      ],
+      "unevaluatedProperties": false
+    },
+    "promotion": {
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {"type": "object", "properties": {"schema": {"const": "justai.promotion_decision.v1"}, "decision": {"enum": ["promote", "unknown", "quarantine"]}, "reason": {"type": "string", "minLength": 1}, "validator_identity": {"type": "string", "minLength": 1}, "validator_independence": {"type": "string", "minLength": 1}, "human_disposition_ref": {"type": ["string", "null"]}}, "required": ["decision", "reason", "validator_identity", "validator_independence", "human_disposition_ref"]}
+      ],
+      "unevaluatedProperties": false
+    },
+    "unknown": {
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {"type": "object", "properties": {"schema": {"const": "justai.unknown.v1"}, "disposition": {"const": "unknown"}, "unknown_reason": {"type": "string", "minLength": 1}, "missing_evidence": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}, "next_review_condition": {"type": "string", "minLength": 1}, "preserved_alternatives": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}, "owner": {"type": "string", "minLength": 1}}, "required": ["unknown_reason", "missing_evidence", "next_review_condition", "preserved_alternatives", "owner"]}
+      ],
+      "unevaluatedProperties": false
+    },
+    "evidence": {
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {"type": "object", "properties": {"schema": {"const": "justai.evidence_manifest.v1"}, "artifact_refs": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}, "source_commit_refs": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}, "custody_root_ref": {"type": "string", "minLength": 1}, "integrity_status": {"type": "string", "minLength": 1}, "excluded_artifacts": {"type": "array", "items": {"type": "string", "minLength": 1}}}, "required": ["artifact_refs", "source_commit_refs", "custody_root_ref", "integrity_status", "excluded_artifacts"]}
+      ],
+      "unevaluatedProperties": false
+    },
+    "integration": {
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {"type": "object", "properties": {"schema": {"const": "justai.integration_result.v1"}, "phase_policy": {"type": "string", "minLength": 1}, "math": {"type": "string", "minLength": 1}, "linguistics": {"type": "string", "minLength": 1}, "evidence": {"type": "string", "minLength": 1}, "observed_ids": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}, "required_digest_refs": {"type": "array", "minItems": 1, "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}, "nonclaims": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}, "external_seal_ref": {"type": ["string", "null"]}}, "required": ["phase_policy", "math", "linguistics", "evidence", "observed_ids", "required_digest_refs", "nonclaims", "external_seal_ref"]}
+      ],
+      "unevaluatedProperties": false
+    },
+    "handoffSeal": {
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {"type": "object", "properties": {"schema": {"const": "justai.integration_handoff_seal.v1"}, "result_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "sealed_payload_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "external_reviewer_id": {"type": "string", "minLength": 1}, "external_public_key": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "signature": {"type": "string", "pattern": "^[0-9a-f]{128}$"}}, "required": ["result_digest", "sealed_payload_digest", "external_reviewer_id", "external_public_key", "signature"]}
+      ],
+      "unevaluatedProperties": false
+    }
+  }
+}

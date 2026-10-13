@@ -1,0 +1,256 @@
+# ---------------------------------------------------------------------------
+# Storefront base defaults.
+# This file documents every supported key and its default. Do NOT put
+# environment-specific values here.
+#
+# Override via (highest priority first):
+#   1. STOREFRONT_* environment variables (separator __)
+#   2. $XDG_CONFIG_HOME/arkhai/storefront.secrets.toml  (Secret overlay)
+#   3. $XDG_CONFIG_HOME/arkhai/storefront.toml          (ConfigMap base)
+#   4. This file
+# ---------------------------------------------------------------------------
+
+
+# HTTP server
+port            = 8000
+base_url        = "http://localhost:8000"  # advertised on-chain; may contain ${zerotier} placeholder
+mcp_server_url  = "http://localhost:8080/mcp"
+zerotier_network = ""
+
+# Storage / logging
+# Persist by default: this is the path the seller compose mounts a named
+# volume at (compose/seller.yml -> .../data/storefront) and the one the
+# quickstart documents, so a config that omits db_path still survives a
+# container recreate. The parent dir is auto-created on first start. An
+# ephemeral default (e.g. /tmp) silently loses all listing/deal state on
+# restart. Operators running outside the container should set an absolute
+# db_path in storefront.toml.
+db_path         = "./src/market_storefront/data/storefront/agent.db"
+log_file_path   = ""
+log_level       = "INFO"
+
+
+# Resource auto-seeding — inline content wins over path
+resources_csv_inline = ""
+resources_csv_path   = ""
+
+
+# Registry discovery (seller-side)
+enable_registry_discovery = true
+registry_order_timeout    = 30
+max_discovery_agents      = 10
+enable_order_retry        = true
+order_retry_interval      = 300
+
+# Resource poller
+resource_check_interval      = 300
+resource_lease_grace_seconds = 1800
+
+# Negotiation watchdog
+negotiation_timeout_seconds   = 1800
+negotiation_watchdog_interval = 60
+# Deal-servicing engine sweep cadence (seconds): how often due claims
+# are checked for collectable conditions / retried collections.
+claims_sweep_interval = 30
+# Advertised buyer-heartbeat cadence (seconds) echoed by the deals
+# endpoint; gating collection on heartbeats is lifecycle policy (I.5).
+heartbeat_interval_seconds = 60
+default_vm_host               = "kvm1"
+# Installed storefront contributions are public, version-pinned assertions.
+# Deployment overlays may replace this array with VM + bare-metal or one exact
+# registration; private keys, provider settings, and authority credentials do
+# not belong here.
+[[storefront_domains]]
+contribution = "vms"
+offering_mode = "vm"
+domain_identity = "compute.v1"
+contract_version = "1.0"
+# Marketplace identity (public). Signing material is supplied only through
+# the ARKHAI_IDENTITY_CREDENTIAL secret environment variable.
+[Identity.principal]
+scheme     = ""
+identifier = ""
+
+# Every provisioning callback peer is an explicit public trust binding.
+# Configure one table per stable peer; site_id must be a configured
+# [capacity.sites] key (or "default" for the single-site form).
+# [Identity.service_peers.provisioning_default]
+# role = "service"
+# site_id = "default"
+# principals = [{ scheme = "ed25519", identifier = "<public-key-base64url>" }]
+
+# Stable administrator subjects use the same scheme-tagged public principals.
+# [Identity.administrators.operator]
+# principals = [{ scheme = "ed25519", identifier = "<public-key-base64url>" }]
+
+
+[Settlement]
+schema_version = 1
+priority = []
+
+# Mechanism subsections are intentionally absent from new defaults. Operators
+# add [Settlement.stripe] and/or [Settlement.alkahest] explicitly; generated
+# role configuration supplies every typed field and the exact capability pins.
+# Hosted consumer configuration contains only public client/trust policy.
+# Provider, webhook, database, migration, EAS, and RPC service configuration is
+# authority-owned and is rejected from [Settlement.stripe].
+
+# [Wallet] and [Chains.<name>] are optional EVM resources supplied by operator
+# overlays. A storefront that only advertises fiat.stripe.v1 leaves them absent.
+# Private wallet material belongs only in storefront.secrets.toml. Alkahest
+# requires Wallet.address plus a selected Chains entry with rpc_url and chain_id.
+
+[registry]
+# Leave empty by default. Any user-supplied list at a higher overlay
+# (storefront.toml / env / secrets) fully replaces this. If we shipped
+# a default URL here, dynaconf's merge_enabled=True would *append* the
+# user's list onto the default, leaving the storefront heartbeating to
+# both registries.
+urls              = []
+discovery_timeout = 5.0
+
+[registry.auth]
+# Free-form table of {url = "bearer-token"} pairs for private registries.
+# Empty by default; populate via storefront.secrets.toml.
+
+[registry.authorities]
+# Public URL → stable registry authority name plus canonical response-signing
+# principals. Keys must exactly match [registry].urls after URL normalization.
+
+[gateway]
+# Path prefix when behind a reverse proxy (e.g. "/storefront"). Empty for direct.
+root_path = ""
+
+[capacity]
+# The authoritative capacity ledger lives in site authorities (hosted
+# by the provisioning service); the storefront is strictly a client.
+# Sites come from a [capacity.sites] table of name → authority URL,
+# e.g.   [capacity.sites]
+#        dc-a = "http://prov-a:8081"
+#        dc-b = "http://prov-b:8081"
+# With no table, authority_url becomes the single site "default"
+# (and itself defaults to provisioning.service_url — that process
+# hosts the site authority). The first site is the storefront's home
+# site: local CSV inventory mirrors there. Every site client uses the
+# storefront signer and pins the site's configured public authority identity;
+# capacity deltas arrive by polling each authority's versioned event feed.
+# placement orders sites for reserves: "fill_first" (configuration
+# order — pack a site before touching the next) or "most_available"
+# (spread to the site with the most free units).
+# hold_ttl_seconds: two-phase reserve — terms acceptance places a soft
+# hold that settlement commits into the lease; it auto-lapses if the
+# escrow never settles. 0 disables acceptance holds, and settlement then
+# does the plain atomic reserve.
+#
+# DEFAULT IS 0 AS A SECURITY POSTURE, NOT A PERFORMANCE TRADE.
+# Nothing gates hold placement on funds, escrow, or any chain
+# interaction: acquiring a hold costs a buyer two signed HTTP requests.
+# There is no rate limiting and no per-buyer concurrency limit, and a
+# fresh buyer address is free to mint, so a single actor can hold a
+# storefront's entire sellable inventory indefinitely at no cost by
+# negotiating, accepting, and never settling. Shortening the window does
+# not fix this — it only raises the request rate the attacker needs,
+# while degrading legitimate settlement.
+#
+# The cost of 0 is a real but far smaller risk: a buyer whose escrow has
+# settled may find the capacity taken and must be refunded. That affects
+# one deal at a time and has a recovery path; the alternative denies
+# every buyer at once. Turn holds back on only once held capacity is
+# billed, so that acquiring exclusivity costs the holder something.
+authority_url    = ""
+poll_interval    = 5
+placement        = "fill_first"
+hold_ttl_seconds = 0
+# Structural capacity source for listing derivation: local tables
+# (compute_capacity_pools/compute_pool_members) unless this is set,
+# in which case the site-resource-pool projection is used instead
+# wherever the storefront's own cache has a loaded value. On by
+# default -- the projection path has parity with local tables,
+# including bucket-sourced fungible capacity, multi-member
+# specific-resource listings, and listing-mode hints. Set to false
+# to fall back to local tables for a staged/canary rollout.
+use_site_projection_for_listings = true
+
+[provisioning]
+service_url            = "http://localhost:8085"
+mode                   = ""        # "mock" | "" — selects mock vs real ansible/kvm path
+timeout                = 3600
+poll_interval          = 15
+preflight_timeout      = 30
+fail_on_unreachable    = true
+frp_server_addr        = ""
+frp_domain             = ""
+frp_dashboard_password = ""
+
+[provisioning.identity]
+# Ordered old/new public response trust pins for provisioning HTTP calls.
+# Private material belongs only to the provisioning service's own Secret.
+principals = []
+
+[fulfillment.failure_policy]
+# Actions applied when provisioning/fulfillment fails. `release_capacity`
+# repairs local inventory/listings; `emit_event` writes to stage_events/SSE;
+# `webhook` POSTs the failure payload to webhook_url; `refund` attempts the
+# explicit seller refund path through the selected token escrow codec when a
+# stored proposal is available.
+actions         = ["release_capacity", "emit_event"]
+webhook_url     = ""
+webhook_timeout = 5.0
+
+[negotiation]
+# Ordered policies run per round. Guards short-circuit (`reject`/`exit`)
+# when their preconditions fail; the terminal policy (typically
+# `bisection` or `rl`) always returns a counter/accept/exit. `rl`
+# requires torch + the pufferlib checkpoint. The legacy
+# `policy_mode = "bisection"` key still works and synthesizes the same
+# default chain (kept for back-compat).
+# For per-escrow-kind terminal dispatch, replace the list with a
+# [negotiation.policies] table, e.g. erc20 = "erc20_bisection";
+# use [negotiation.policies.<kind>] chain = [...] when a kind needs
+# its own guard + terminal sequence.
+policies           = ["has_matching_inventory_guard", "escrow_shape_guard", "bisection"]
+seller_model_path  = "domains/vms/negotiation/rl/models/arkhai_negotiator_seller.pt"
+buyer_model_path   = "domains/vms/negotiation/rl/models/arkhai_negotiator_buyer.pt"
+extra_policy_paths = []
+
+[pricing]
+# Structured settlement option defaults. Each entry is one complete clause;
+# inventory-row or command clauses replace this list rather than merging fields.
+settlements = []
+default_min_price            = ""
+default_token_address        = ""
+default_max_duration_seconds = 0   # 0 means unlimited
+publish_priceless            = false
+# Whether a resource pool's own projected `sla` hint
+# is consulted at all when resolving a listing's advertised SLA (the
+# middle tier of a storefront override > pool hint > this default
+# precedence chain -- see domains.vms.listings.pool_descriptors).
+# Off by default: publishing a site's self-reported SLA claim is new
+# capability a storefront operator must opt into, not something already
+# trusted today.
+accept_pool_declared_sla     = false
+# Storefront's own default SLA when neither a per-pool override
+# (compute_capacity_pools.sla) nor a trusted pool hint applies.
+default_sla                  = 0.0
+
+# Per-GPU-model pricing defaults (tier 1 of the
+# storefront-override > pool-hint > this-default precedence chain --
+# see domains.vms.listings.pricing_resolution). Structured to mirror
+# the structured-capacity-requirements change's own family-grouped
+# requirement shape, reserving room for non-GPU families (cpu/memory/
+# storage) once that change's vocabulary has landed and a pricing
+# dimension exists to key them by -- only `gpu` has entries today.
+# Add one [pricing.defaults.gpu.<model>] table per priced model; a
+# model with no table here, or a field left unset within one, falls
+# through to default_min_price/default_token_address/
+# default_max_duration_seconds above. Empty by default -- no priced
+# models ship out of the box.
+#
+# Example:
+# [pricing.defaults.gpu.H100]
+# min_price = "5.00"
+# token     = "0x0000000000000000000000000000000000000000"
+
+[integrations]
+# Sensitive — populated by Secret overlay.
+gemini_api_key = ""

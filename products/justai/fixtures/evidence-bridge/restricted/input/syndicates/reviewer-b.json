@@ -1,0 +1,20 @@
+{
+  "schema": "justai.syndicate.v1",
+  "record_id": "syndicate-reviewer-b-manifest",
+  "state_slice": "justai-evidence-bridge-v1",
+  "status": "Declared",
+  "claim_ceiling": "reviewer-identity-only",
+  "created_at": "2026-09-09T12:00:00Z",
+  "publisher_id": "reviewer-community-b",
+  "source_digests": [],
+  "content_digest": "fb1ccf3e927593be61706f7b1ab438083c984c62cd90539dd25ab09d0e637704",
+  "signature_refs": [{"key_id": "reviewer-b-key", "purpose": "record", "public_key": "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394", "signature": "a26e10fa78cffe6e487c2e92aca7608e0935fd5006db41bf0058bbe40d0c9964b150370fccc7f64abdea2b0e37f7a64848cdcc98202e3e4865b1bbdeb685b908"}],
+  "syndicate_id": "reviewer-community-b",
+  "syndicate_name": "Reviewer community B",
+  "jurisdiction": "US",
+  "roles": ["independent-review"],
+  "public_key": "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394",
+  "charter_version": "justai-evidence-bridge-v1",
+  "funding_disclosure": "Synthetic development fixture; no funding claim.",
+  "conflict_disclosure": "Synthetic reviewer identity; no conflict represented."
+}

@@ -1,0 +1,91 @@
+"""Persistence ports used by core orchestration modules."""
+
+from __future__ import annotations
+
+from typing import Any, Protocol
+from market_identity import Identity
+
+
+
+class NegotiationThreadPersistencePort(Protocol):
+    async def create_negotiation_thread(
+        self,
+        *,
+        negotiation_id: str,
+        our_listing_id: str,
+        their_listing_id: str,
+        our_agent_id: str,
+        their_agent_id: str,
+        buyer_principal: Identity,
+        seller_principal: Identity,
+        owner_id: str,
+        our_initial_price: int | str | float | None = None,
+        our_strategy: str | None = None,
+        requested_duration_seconds: int | None = None,
+        requested_start_utc: str | None = None,
+        buyer_escrow_proposal: dict[str, Any] | None = None,
+        provision_terms: dict[str, Any] | None = None,
+    ) -> None: ...
+
+    async def get_thread_info(
+        self,
+        *,
+        negotiation_id: str,
+        owner_id: str,
+    ) -> dict[str, Any] | None: ...
+
+    async def load_negotiation_thread(
+        self,
+        *,
+        negotiation_id: str,
+    ) -> list[dict[str, Any]]: ...
+
+    async def save_negotiation_message(
+        self,
+        *,
+        negotiation_id: str,
+        round: int | None,
+        sender_principal: Identity,
+        sender_role: str,
+        our_price: int | str | float | None,
+        their_price: int | str | float | None,
+        proposed_price: int | str | float | None,
+        action_taken: str,
+        message_type: str,
+        timestamp: str,
+    ) -> int: ...
+
+    async def update_negotiation_thread_terminal(
+        self,
+        *,
+        negotiation_id: str,
+        terminal_state: str,
+    ) -> None: ...
+
+    async def delete_negotiation_thread(
+        self,
+        *,
+        negotiation_id: str,
+    ) -> None: ...
+
+    async def check_existing_negotiation(
+        self,
+        *,
+        our_listing_id: str,
+        their_listing_id: str,
+        our_agent_id: str | None = None,
+        their_agent_id: str | None = None,
+    ) -> dict[str, Any] | None: ...
+
+    async def get_active_negotiations_for_listing(
+        self,
+        *,
+        listing_id: str,
+    ) -> list[dict[str, Any]]: ...
+
+    async def cancel_negotiations_for_listing(
+        self,
+        *,
+        listing_id: str,
+        except_negotiation_id: str | None = None,
+    ) -> list[dict[str, Any]]: ...

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://justai.org/schemas/justai.v1/signature-ref.schema.json",
+  "title": "JustAI signature reference",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["key_id", "purpose", "public_key", "signature"],
+  "properties": {
+    "key_id": {"type": "string", "minLength": 1},
+    "purpose": {"type": "string", "minLength": 1},
+    "public_key": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "signature": {"type": "string", "pattern": "^[0-9a-f]{128}$"}
+  }
+}
+

@@ -1,0 +1,22 @@
+{
+  "schema": "justai.artifact_manifest.v1",
+  "record_id": "artifact-restricted-demo",
+  "state_slice": "justai-evidence-bridge-v1",
+  "status": "Corroborated",
+  "claim_ceiling": "bounded-observation-only",
+  "created_at": "2026-09-09T12:00:00Z",
+  "publisher_id": "justai-pilot-syndicate",
+  "source_digests": [],
+  "content_digest": "",
+  "signature_refs": [],
+  "artifact_kind": "trace",
+  "access_class": "restricted",
+  "custody_mode": "attested",
+  "license_basis": "Synthetic restricted fixture; raw material is not present in this repository.",
+  "custodian_id": "fixture-restricted-custodian",
+  "acquisition_timestamp": "2026-09-09T12:00:00Z",
+  "artifact_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+  "permitted_uses": ["bounded-evaluation"],
+  "retention_and_disclosure_rules": "Raw restricted bytes remain outside Git; publish only aggregate receipts.",
+  "evidence_basis": "restricted-attested"
+}

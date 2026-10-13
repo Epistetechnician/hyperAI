@@ -1,0 +1,49 @@
+[project]
+name = "arkhai-core-buyer"
+version = "0.3.2"
+license = "MIT"
+description = "Core buyer role shell and orchestration contracts"
+requires-python = ">=3.12"
+dependencies = [
+  # The `market` verb skeleton + plugin assembly (core_buyer.cli).
+  "typer>=0.12.0",
+  # Candidate tables + price-confirmation rendering in the scalar policy surface.
+  "rich>=13.7.0",
+  # Generic registry discovery config (registry.urls/auth/discovery_timeout)
+  # comes from the shared buyer TOML loader in kit.
+  "arkhai-kit-config",
+  # Negotiation chain framework + buyer-policy registry; the scalar
+  # policies themselves (listed_price/bisection middlewares) also live
+  # in kit-policy and register on import.
+  "arkhai-kit-policy",
+  # Installed delivery sinks: the buyer's own copy of a revealed deal,
+  # sent where they read things. No mechanism dependency comes with it.
+  "arkhai-kit-delivery==0.1.0",
+  # Mechanism-neutral settlement selection and plan carriers.
+  "arkhai-core>=0.2.0",
+  # Installed mechanism registration, canonical priority, and recovery dispatch.
+  "arkhai-kit-settlement-runtime==0.1.2",
+  # Canonical principals, signer injection, and v2 request/response proofs.
+  "arkhai-kit-identity==0.3.0",
+  # Signed registry discovery with pinned authority responses.
+  "arkhai-core-registry-client==0.11.0",
+]
+
+[project.scripts]
+market = "core_buyer.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/core_buyer"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests/unit"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.4,<9.0.0",
+]

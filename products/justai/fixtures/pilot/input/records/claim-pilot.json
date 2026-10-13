@@ -1,0 +1,20 @@
+{
+  "schema": "justai.claim.v1",
+  "record_id": "claim-pilot-001",
+  "state_slice": "justai-public-observatory-v1",
+  "status": "Contested",
+  "claim_ceiling": "locator-only-development-pilot",
+  "created_at": "2026-09-09T12:00:00Z",
+  "publisher_id": "justai-pilot-syndicate",
+  "source_digests": ["1bc6bda4f5330c44c4f29dcf50dad0741bdd831c30560348e610163414a5eba1"],
+  "content_digest": "",
+  "signature_refs": [],
+  "claim": "This pilot record does not establish an incident, harm, or safety claim.",
+  "claim_type": "methodology",
+  "scope": "JustAI publication pipeline only",
+  "uncertainty": "External source content is not mirrored or independently established in this fixture.",
+  "affected_party_response": "No affected-party response requested for a locator-only fixture.",
+  "support_refs": ["source-openai-hf"],
+  "contradiction_refs": [],
+  "review_receipt_refs": ["review-claim-a", "review-claim-b"]
+}

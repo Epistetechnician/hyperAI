@@ -1,0 +1,35 @@
+{
+  "schema": "justai.release.v1",
+  "record_id": "release-fixture-001",
+  "state_slice": "justai-public-observatory-v1",
+  "status": "NotReady",
+  "claim_ceiling": "development-fixture-only",
+  "created_at": "2026-09-09T12:00:00Z",
+  "publisher_id": "syndicate-fixture",
+  "source_digests": [],
+  "content_digest": "",
+  "signature_refs": [],
+  "records": [
+    {
+      "schema": "justai.claim.v1",
+      "record_id": "claim-fixture-001",
+      "state_slice": "justai-observatory-contracts-v1",
+      "status": "Submitted",
+      "claim_ceiling": "bounded-description-only",
+      "created_at": "2026-09-09T12:00:00Z",
+      "publisher_id": "syndicate-fixture",
+      "source_digests": [],
+      "content_digest": "004df8298a80a7178e129f78727c6737b15fad7a291950b638abab709a31d6b8",
+      "signature_refs": [],
+      "claim": "This is a development fixture, not public evidence.",
+      "claim_type": "fact",
+      "scope": "fixture-only",
+      "uncertainty": "The fixture has no evidentiary value.",
+      "affected_party_response": "Not applicable to a fixture.",
+      "support_refs": ["fixture-source"],
+      "contradiction_refs": [],
+      "review_receipt_refs": []
+    }
+  ],
+  "supersedes": []
+}

@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://justai.org/schemas/justai.v1/local-quorum.schema.json",
+  "title": "JustAI local quorum verification packet",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "record_id", "state_slice", "status", "verification_mode", "claim_ceiling", "artifact_digest", "evaluation_scope", "expected_result_digest", "content_digest", "signature_refs", "instances"],
+  "properties": {
+    "schema": {"const": "justai.local_quorum.v1"},
+    "record_id": {"type": "string", "minLength": 1},
+    "state_slice": {"const": "justai-local-quorum-v1"},
+    "status": {"const": "Verified"},
+    "verification_mode": {"const": "local-quorum"},
+    "claim_ceiling": {"const": "local-replay"},
+    "artifact_digest": {"$ref": "#/$defs/digest"},
+    "evaluation_scope": {"type": "string", "minLength": 1},
+    "expected_result_digest": {"$ref": "#/$defs/digest"},
+    "content_digest": {"$ref": "#/$defs/digest"},
+    "signature_refs": {"type": "array", "minItems": 3, "items": {"$ref": "#/$defs/signature"}},
+    "instances": {"type": "array", "minItems": 3, "items": {"$ref": "#/$defs/instance"}}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "instance_id", "principal_id", "key_id", "purpose", "public_key", "signature"],
+      "properties": {
+        "role": {"const": "instance"},
+        "instance_id": {"type": "string", "minLength": 1},
+        "principal_id": {"type": "string", "minLength": 1},
+        "key_id": {"type": "string", "minLength": 1},
+        "purpose": {"type": "string", "pattern": "^instance:.+$"},
+        "public_key": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "signature": {"type": "string", "pattern": "^[0-9a-f]{128}$"}
+      }
+    },
+    "instance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["instance_id", "machine_digest", "environment_digest", "runner_digest", "observed_result_digest", "output_digest", "status", "started_at", "completed_at"],
+      "properties": {
+        "instance_id": {"type": "string", "minLength": 1},
+        "machine_digest": {"$ref": "#/$defs/digest"},
+        "environment_digest": {"$ref": "#/$defs/digest"},
+        "runner_digest": {"$ref": "#/$defs/digest"},
+        "observed_result_digest": {"$ref": "#/$defs/digest"},
+        "output_digest": {"$ref": "#/$defs/digest"},
+        "status": {"const": "pass"},
+        "started_at": {"type": "string", "format": "date-time"},
+        "completed_at": {"type": "string", "format": "date-time"}
+      }
+    }
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "schema": "justai.review_receipt.v1",
+  "record_id": "review-incident-b",
+  "state_slice": "justai-public-observatory-v1",
+  "status": "IndependentlyVerified",
+  "claim_ceiling": "review-attestation-only",
+  "created_at": "2026-09-09T12:00:00Z",
+  "publisher_id": "reviewer-community-b",
+  "source_digests": [],
+  "content_digest": "",
+  "signature_refs": [],
+  "reviewer_id": "reviewer-b",
+  "reviewer_org": "reviewer-community-b",
+  "reviewed_record_id": "incident-pilot-001",
+  "reviewed_digest": "026b37c411ec852a75babd1beffd34d138be8c483e1b458ba893695ea45130cf",
+  "syndicate_manifest_ref": "syndicate-reviewer-b-manifest",
+  "result": "accept",
+  "conflict_of_interest": false,
+  "independence_basis": "Separate development reviewer; fixture scope only."
+}

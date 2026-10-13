@@ -1,0 +1,53 @@
+{{- $itValues := dict -}}
+{{- if .Values.global -}}
+  {{- $itValues = .Values.global.integrationTests | default dict -}}
+{{- end -}}
+{{- $rootIt := ((.Values).integrationTests) | default dict -}}
+{{- $tests := .Values.tests | default dict -}}
+{{- $itRepo := $rootIt.repository | default ($itValues.repository | default "") -}}
+{{- if and (not $itRepo) .Values.global -}}
+  {{- $itRepo = .Values.global.imageRepository | default "" -}}
+{{- end -}}
+{{- $itName := $rootIt.name | default ($itValues.name | default "arkhai") -}}
+{{- $itTag := $rootIt.tag | default ($itValues.tag | default "e2e-tests") -}}
+{{- $itDigest := $rootIt.digest | default ($itValues.digest | default "") -}}
+{{- $itPull := $rootIt.pullPolicy | default ($itValues.pullPolicy | default "IfNotPresent") -}}
+{{- $itImageName := $itName -}}
+{{- if $itRepo -}}
+  {{- $itImageName = printf "%s/%s" $itRepo $itName -}}
+{{- end -}}
+{{- $itImage := printf "%s:%s" $itImageName $itTag -}}
+{{- if $itDigest -}}
+  {{- $itImage = printf "%s@%s" $itImageName $itDigest -}}
+{{- end -}}
+{{- $profiles := $tests.activeProfiles | default (include "provisioning.smokeTestActiveProfiles" .) -}}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "provisioning.fullname" . }}-smoke-test
+  labels:
+    {{- include "provisioning.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  restartPolicy: Never
+  containers:
+    - name: {{ include "provisioning.fullname" . }}-smoke-test
+      image: {{ $itImage }}
+      imagePullPolicy: {{ $itPull }}
+      command:
+        - .venv/bin/pytest
+        - -m
+        - provisioning_readonly
+      env:
+        - name: ACTIVE_PROFILES
+          value: {{ $profiles | quote }}
+      volumeMounts:
+        {{- include "provisioning.smokeTestConfigVolumeMounts" . | nindent 8 }}
+        {{- include "provisioning.smokeTestSecretVolumeMounts" . | nindent 8 }}
+  volumes:
+    - name: test-config
+      configMap:
+        name: {{ .Release.Name }}-test-config
+    {{- include "provisioning.smokeTestSecretVolume" . | nindent 4 }}

@@ -1,0 +1,20 @@
+{
+  "schema": "justai.policy_trace.v1",
+  "record_id": "policy-restricted-demo",
+  "state_slice": "justai-evidence-bridge-v1",
+  "status": "Declared",
+  "claim_ceiling": "lawful-policy-traceability-only",
+  "created_at": "2026-09-09T12:00:00Z",
+  "publisher_id": "justai-pilot-syndicate",
+  "source_digests": ["2222222222222222222222222222222222222222222222222222222222222222"],
+  "content_digest": "",
+  "signature_refs": [],
+  "artifact_refs": ["artifact-restricted-demo"],
+  "evidence_refs": ["evaluation-restricted-demo"],
+  "evaluation_receipt_refs": ["evaluation-restricted-demo"],
+  "review_receipt_refs": ["review-restricted-policy-a", "review-restricted-policy-b"],
+  "claim_projection_refs": ["projection-restricted-demo"],
+  "demand": "Require public accountability without demanding unsafe disclosure of restricted material.",
+  "lawful_target": "The accountable publication process and the actor authorized to hold the restricted artifact.",
+  "response": "Accept contestation and corrections through digest-bound reviewed records; preserve withheld material outside Git."
+}

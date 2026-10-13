@@ -1,0 +1,49 @@
+{
+  "schema": "justai.state_slice_freeze.v1",
+  "state_slice": "justai-governed-discovery-monorepo-v1",
+  "freeze_status": "frozen-for-review",
+  "frozen_at": "2026-09-09",
+  "base_commit": "fd28c501f013137706404d496da51234f4146dde",
+  "scope_rule": "Only files listed as governed-slice-owned may enter the review commit. Mixed files remain uncommitted until their hunks are independently separated.",
+  "owned_paths": [
+    "apps/",
+    "crates/justai-contracts/src/governed.rs",
+    "crates/security-broker/",
+    "crates/subprocess-harness/",
+    "docs/architecture/",
+    "docs/claims/",
+    "docs/operations/",
+    "docs/provenance/",
+    "manifests/",
+    "packages/",
+    "protocols/",
+    "schemas/justai.v1/governed-records.schema.json",
+    "tests/",
+    "tools/verify_monorepo.py"
+  ],
+  "mixed_paths": [
+    "Cargo.toml",
+    "Cargo.lock",
+    "README.md",
+    "crates/justai-contracts/src/lib.rs",
+    "package.json",
+    "pnpm-workspace.yaml",
+    "tools/independent_validate.py"
+  ],
+  "preserved_concurrent_paths": [
+    "crates/justai-contracts/src/main.rs",
+    "crates/justai-contracts/src/records.rs",
+    "docs/evidence-policy.md",
+    "docs/roadmap.md",
+    "fixtures/evidence-bridge/",
+    "fixtures/pilot/",
+    "schemas/justai.v1/evidence-bridge.schema.json",
+    "schemas/justai.v1/review-receipt.schema.json",
+    "site/render.mjs",
+    "tools/source_intake.py",
+    "tools/tests/"
+  ],
+  "external_execution": "closed",
+  "source_repositories_preserved": true,
+  "review_commit_rule": "No source repository is modified, deleted, archived, or vendored by this freeze."
+}

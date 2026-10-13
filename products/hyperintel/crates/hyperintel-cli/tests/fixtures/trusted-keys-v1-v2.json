@@ -1,0 +1,31 @@
+{
+  "trusted_verification_keys": [
+    {
+      "key_id": "key:alpha-offer",
+      "public_key_hex": "5e212c0980e4b39fc09721134aa02109374edfd260c0d3d03cb501c8d65457a9",
+      "revoked_at": null,
+      "signer_id": "provider:alpha",
+      "trust_root_class": "PROVIDER_KEY",
+      "valid_from": "2026-07-20T00:00:00Z",
+      "valid_until": "2026-07-22T00:00:00Z"
+    },
+    {
+      "key_id": "key:beta-offer",
+      "public_key_hex": "17cb79fb2b4120f2b1ec65e4198d6e08b28e813feb01e4a400839b85e18080ce",
+      "revoked_at": null,
+      "signer_id": "provider:beta",
+      "trust_root_class": "PROVIDER_KEY",
+      "valid_from": "2026-07-20T00:00:00Z",
+      "valid_until": "2026-07-22T00:00:00Z"
+    },
+    {
+      "key_id": "key:service-1",
+      "public_key_hex": "5526f742941711b3bc530ba44ff6f6dab0f0ab71af832f41a7fe3b9fdaed9c60",
+      "revoked_at": null,
+      "signer_id": "verifier:service",
+      "trust_root_class": "VERIFIER_KEY",
+      "valid_from": "2026-07-20T00:00:00Z",
+      "valid_until": "2026-07-22T00:00:00Z"
+    }
+  ]
+}

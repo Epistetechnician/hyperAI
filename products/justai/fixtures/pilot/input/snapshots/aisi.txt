@@ -1,0 +1,3 @@
+locator-only snapshot
+url=https://www.aisi.gov.uk/blog/incident-report-unsanctioned-agent-behaviour-during-cyber-testing
+external content intentionally not mirrored in v1.

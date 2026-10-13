@@ -1,0 +1,3 @@
+locator-only snapshot
+url=https://www.redwoodresearch.org/research/hugging-face-incident
+external content intentionally not mirrored in v1.

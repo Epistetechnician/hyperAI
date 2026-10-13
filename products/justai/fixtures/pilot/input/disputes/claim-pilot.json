@@ -1,0 +1,18 @@
+{
+  "schema": "justai.dispute.v1",
+  "record_id": "dispute-claim-pilot-001",
+  "state_slice": "justai-public-observatory-v1",
+  "status": "Contested",
+  "claim_ceiling": "locator-only-development-pilot",
+  "created_at": "2026-09-09T12:00:00Z",
+  "publisher_id": "justai-pilot-syndicate",
+  "source_digests": [],
+  "content_digest": "",
+  "signature_refs": [],
+  "challenger_id": "pilot-challenger",
+  "disputed_record_id": "claim-pilot-001",
+  "basis": "The fixture must not be read as evidence about the external source.",
+  "affected_party_response": "No affected-party response requested for a locator-only fixture.",
+  "resolution": "Preserve as contested and retain the locator-only claim ceiling.",
+  "contestation": "The fixture remains contestable and must not be promoted to an external factual claim."
+}

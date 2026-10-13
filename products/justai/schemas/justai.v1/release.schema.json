@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://justai.org/schemas/justai.v1/release.schema.json",
+  "title": "JustAI signed release manifest",
+  "$ref": "envelope.schema.json",
+  "allOf": [
+    {
+      "type": "object",
+      "required": ["records", "supersedes"],
+      "properties": {
+        "schema": {"const": "justai.release.v1"},
+        "records": {"type": "array", "items": {"$ref": "envelope.schema.json"}},
+        "supersedes": {
+          "type": "array",
+          "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "uniqueItems": true
+        }
+      }
+    }
+  ]
+}
+

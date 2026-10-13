@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://justai.org/schemas/justai.v1/protected-intake.schema.json",
+  "title": "JustAI protected intake handoff",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "record_id", "state_slice", "status", "artifact_digest", "evidence_basis",
+    "claim_ceiling", "content_digest", "signature_refs", "identity_registry", "custody",
+    "authorization", "witnessed_evaluation", "bound_records", "reviewer_manifest_attestations",
+    "independent_reviews", "disclosure_decision"
+  ],
+  "properties": {
+    "schema": {"const": "justai.protected_intake.v1"},
+    "record_id": {"type": "string", "minLength": 1},
+    "state_slice": {"const": "justai-protected-intake-v1"},
+    "status": {"const": "Ready"},
+    "artifact_digest": {"$ref": "#/$defs/digest"},
+    "evidence_basis": {"type": "string", "minLength": 1},
+    "claim_ceiling": {"type": "string", "minLength": 1},
+    "content_digest": {"$ref": "#/$defs/digest"},
+    "signature_refs": {"type": "array", "minItems": 4, "items": {"$ref": "#/$defs/signature"}},
+    "identity_registry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["control_mode", "registry_ref", "registry_digest"],
+      "properties": {
+        "control_mode": {"const": "external"},
+        "registry_ref": {"type": "string", "minLength": 1},
+        "registry_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "custody": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["control_mode", "access_class", "custodian_id", "artifact_digest", "custody_receipt_digest", "received_at", "retention_rule"],
+      "properties": {
+        "control_mode": {"const": "external"},
+        "access_class": {"enum": ["restricted", "protected"]},
+        "custodian_id": {"type": "string", "minLength": 1},
+        "artifact_digest": {"$ref": "#/$defs/digest"},
+        "custody_receipt_digest": {"$ref": "#/$defs/digest"},
+        "received_at": {"type": "string", "format": "date-time"},
+        "retention_rule": {"type": "string", "minLength": 1}
+      }
+    },
+    "authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["authority_id", "authorization_digest", "scope", "issued_at", "expires_at"],
+      "properties": {
+        "authority_id": {"type": "string", "minLength": 1},
+        "authorization_digest": {"$ref": "#/$defs/digest"},
+        "scope": {"type": "string", "minLength": 1},
+        "issued_at": {"type": "string", "format": "date-time"},
+        "expires_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "witnessed_evaluation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evaluation_record_ref", "evaluation_record_digest", "artifact_digest", "evaluation_scope", "environment_digest", "runner_digest", "observed_result_digest", "witness_attestation_digest", "started_at", "completed_at", "witness_ids"],
+      "properties": {
+        "evaluation_record_ref": {"type": "string", "minLength": 1},
+        "evaluation_record_digest": {"$ref": "#/$defs/digest"},
+        "artifact_digest": {"$ref": "#/$defs/digest"},
+        "evaluation_scope": {"type": "string", "minLength": 1},
+        "environment_digest": {"$ref": "#/$defs/digest"},
+        "runner_digest": {"$ref": "#/$defs/digest"},
+        "observed_result_digest": {"$ref": "#/$defs/digest"},
+        "witness_attestation_digest": {"$ref": "#/$defs/digest"},
+        "started_at": {"type": "string", "format": "date-time"},
+        "completed_at": {"type": "string", "format": "date-time"},
+        "witness_ids": {"type": "array", "minItems": 2, "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+      }
+    },
+    "bound_records": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["schema", "content_digest"],
+        "properties": {"schema": {"type": "string", "minLength": 1}, "content_digest": {"$ref": "#/$defs/digest"}}
+      }
+    },
+    "reviewer_manifest_attestations": {"type": "array", "minItems": 2, "items": {"$ref": "#/$defs/manifest_attestation"}},
+    "independent_reviews": {"type": "array", "minItems": 2, "items": {"$ref": "#/$defs/review"}},
+    "disclosure_decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decision_record_ref", "decision_record_digest", "decision", "reason"],
+      "properties": {
+        "decision_record_ref": {"type": "string", "minLength": 1},
+        "decision_record_digest": {"$ref": "#/$defs/digest"},
+        "decision": {"enum": ["public", "aggregate_only", "withhold", "unknown"]},
+        "reason": {"type": "string", "minLength": 1},
+        "public_projection_ref": {"type": "string", "minLength": 1},
+        "public_projection_digest": {"$ref": "#/$defs/digest"}
+      }
+    }
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "principal_id", "key_id", "purpose", "public_key", "signature"],
+      "properties": {
+        "role": {"type": "string", "minLength": 1},
+        "principal_id": {"type": "string", "minLength": 1},
+        "key_id": {"type": "string", "minLength": 1},
+        "purpose": {"type": "string", "minLength": 1},
+        "public_key": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "signature": {"type": "string", "pattern": "^[0-9a-f]{128}$"}
+      }
+    },
+    "manifest_attestation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["manifest_ref", "manifest_digest", "reviewer_org", "signature_ref"],
+      "properties": {
+        "manifest_ref": {"type": "string", "minLength": 1},
+        "manifest_digest": {"$ref": "#/$defs/digest"},
+        "reviewer_org": {"type": "string", "minLength": 1},
+        "signature_ref": {"$ref": "#/$defs/signature"}
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["review_receipt_ref", "review_receipt_digest", "reviewer_org", "reviewer_manifest_ref", "reviewer_manifest_digest", "result", "conflict_of_interest", "signature_ref"],
+      "properties": {
+        "review_receipt_ref": {"type": "string", "minLength": 1},
+        "review_receipt_digest": {"$ref": "#/$defs/digest"},
+        "reviewer_org": {"type": "string", "minLength": 1},
+        "reviewer_manifest_ref": {"type": "string", "minLength": 1},
+        "reviewer_manifest_digest": {"$ref": "#/$defs/digest"},
+        "result": {"const": "accept"},
+        "conflict_of_interest": {"const": false},
+        "signature_ref": {"$ref": "#/$defs/signature"}
+      }
+    }
+  }
+}

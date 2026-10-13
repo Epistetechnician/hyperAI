@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://justai.org/schemas/justai.v1/review-receipt.schema.json",
+  "title": "JustAI independent review receipt",
+  "$ref": "envelope.schema.json",
+  "allOf": [{
+    "type": "object",
+    "required": ["reviewer_id", "reviewer_org", "reviewed_record_id", "reviewed_digest", "syndicate_manifest_ref", "result", "conflict_of_interest", "independence_basis"],
+    "properties": {
+      "schema": {"const": "justai.review_receipt.v1"},
+      "reviewed_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+      "syndicate_manifest_ref": {"type": "string", "minLength": 1},
+      "result": {"enum": ["accept", "needs_revision", "reject"]},
+      "conflict_of_interest": {"type": "boolean"}
+    }
+  }]
+}

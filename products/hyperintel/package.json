@@ -1,0 +1,13 @@
+{
+  "name": "hyperintel",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@9.15.5",
+  "scripts": {
+    "lint:fast": "./tools/pinned-cargo fmt --all -- --check && ./tools/pinned-cargo check --workspace",
+    "test:focused": "./tools/pinned-cargo test -p hyperintel-market --test vertical_slice && ./tools/pinned-cargo test -p hyperintel-persistence --test durable_replay && ./tools/pinned-cargo test -p hyperintel-execution && ./tools/pinned-cargo test -p hyperintel-execution-journal && ./tools/pinned-cargo test -p hyperintel-reconciliation && ./tools/pinned-cargo test -p hyperintel-runtime-config && ./tools/pinned-cargo test -p hyperintel-tenant-iam && ./tools/pinned-cargo test -p hyperintel-secret-provider && ./tools/pinned-cargo test -p hyperintel-provider-agent && ./tools/pinned-cargo test -p hyperintel-cli",
+    "verify:contracts": "./tools/pinned-cargo test --workspace contract_",
+    "lint": "./tools/pinned-cargo fmt --all -- --check && ./tools/pinned-cargo clippy --workspace --all-targets -- -D warnings",
+    "verify:full": "pnpm run lint && ./tools/pinned-cargo test --workspace && ./tools/pinned-cargo doc --workspace --no-deps"
+  }
+}

@@ -1,0 +1,20 @@
+[package]
+name = "hyperintel-assurance"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+data-encoding.workspace = true
+ed25519-dalek.workspace = true
+hyperintel-core = { path = "../hyperintel-core" }
+serde.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

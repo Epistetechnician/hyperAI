@@ -1,0 +1,180 @@
+global:
+  provisioningIdentity:
+    scheme: eip191
+    identifier: "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+
+# Default values for the provisioning subchart.
+# These are overridden by the parent chart's provisioning: block.
+
+# ---------------------------------------------------------------------------
+# Mock mode — activates ProgrammableMockAnsibleService instead of the real
+# AnsibleService. No Ansible binary, SSH key, or KVM host is required.
+# Returned VM credentials are deterministic fakes.
+#
+# When true, "mock" is appended to ACTIVE_PROFILES in the Deployment so the
+# container.py factory selects MockAnsibleService at startup. The mock dynaconf
+# profile (config-mock.yml, bundled in the image) is loaded automatically.
+#
+# Set to true for dev/CI clusters. Never true in production.
+# ---------------------------------------------------------------------------
+mockMode: false
+
+# ---------------------------------------------------------------------------
+# Helm smoke-test configuration.
+# ---------------------------------------------------------------------------
+tests:
+  activeProfiles: ""
+
+# ---------------------------------------------------------------------------
+# Server
+# ---------------------------------------------------------------------------
+server:
+  image:
+    repository: ""
+    name: arkhai
+    tag: compute-provisioning
+    digest: ""
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  port: 8081
+  type: ClusterIP
+
+# ---------------------------------------------------------------------------
+# Provisioning credentials are always operator-managed Kubernetes Secrets.
+# sshKey.secretName must expose `id_ed25519`; sshDecryptionKey.secretName must
+# expose `config-provisioning-secrets.yml`. The chart never accepts credential,
+# inventory, or callback-token contents as values.
+# ---------------------------------------------------------------------------
+sshKey:
+  createSecret: false
+  secretName: arkhai-provisioning-ssh
+
+sshDecryptionKey:
+  createSecret: false
+  secretName: arkhai-provisioning-runtime
+
+# Marketplace service identity is public configuration; only the matching
+# signer credential is read from the referenced Kubernetes Secret.
+identity:
+  principal:
+    scheme: eip191
+    identifier: "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+  credentialSecret:
+    name: arkhai-provisioning-identity
+    key: credential
+
+# Exact storefront principals authorized for lifecycle callbacks.
+storefrontIdentity:
+  principals:
+    - scheme: eip191
+      identifier: "0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc"
+
+# Exact operator principals authorized for provisioning admin routes.
+adminIdentity:
+  principals:
+    - scheme: eip191
+      identifier: "0x9965507d1a55bcc2695c58ba16fb37d819b0a4dc"
+
+# ---------------------------------------------------------------------------
+# Storefront callback target for the lease watchdog.
+#
+# The provisioning service owns the vm_leases table. When a lease expires, its
+# watchdog patches the seller storefront resource back to available. The
+# callback credential is supplied inside the operator-managed runtime Secret.
+storefront:
+  url: ""
+  agentName: "bob"
+  port: 8001
+
+# ---------------------------------------------------------------------------
+# Application config — rendered into a ConfigMap as config-production.yml
+# and mounted at CONFIG_DIRECTORY inside the container.
+#
+# Keys use snake_case to match settings.toml directly. Only keys listed here
+# are rendered; omitted keys fall back to settings.toml defaults.
+# ---------------------------------------------------------------------------
+config:
+  database_url: "sqlite:////app/data/provisioning.db"
+
+  # Ansible paths — set to the IaC tree location inside the container.
+  # Override here for environments that mount the IaC at a different path.
+  playbook_path: "/opt/domains/vms/provisioning/iac/ansible/playbooks/single-tenant/vm-operations.yaml"
+  bare_metal_playbook_path: "/opt/domains/vms/provisioning/iac/ansible/playbooks/bare-metal/node-access.yaml"
+  inventory_path: "/opt/domains/vms/provisioning/iac/ansible/inventory/hosts"
+  management_vars_path: "/opt/domains/vms/provisioning/iac/ansible/inventory/management-vars.yaml"
+
+  # Ansible runtime
+  ansible_timeout_seconds: 1800
+  default_vm_host: "kvm1"
+
+  # Golden image public settings. Credentials belong in the runtime Secret.
+  golden_root_ssh_filename: ""
+  golden_image_name: ""
+  golden_gcs_bucket: ""
+  golden_gcs_project: ""
+
+  # FRP tunneling
+  frp_server_addr: ""
+  frp_domain: ""
+
+  # Lease watchdog
+  lease_watchdog_enabled: true
+  lease_watchdog_poll_interval_seconds: 60
+  lease_watchdog_grace_period_seconds: 300
+  storefront_site_id: "default"
+  storefront_url: ""
+
+  # Rate limiting
+  enable_rate_limiting: false
+  rate_limit_requests_per_minute: 30
+
+  # Logging
+  log_level: "info"
+
+# Resource requests/limits — tune per environment
+resources: {}
+#  requests:
+#    cpu: 100m
+#    memory: 128Mi
+#  limits:
+#    cpu: 500m
+#    memory: 512Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# ---------------------------------------------------------------------------
+# Persistence — ReadWriteOnce PVC backing the provisioning service's
+# SQLite database (`provisioning.db` at /app/data) plus any in-flight
+# state (vm_leases, hosts, ansible inventory snapshots).
+#
+# Without persistence the SQLite DB lives on emptyDir — pod restarts
+# lose all known leases, host registrations seeded from the secret-
+# overlay reseed but anything created via the API is gone. With
+# persistence enabled, restarts are transparent.
+#
+# enabled: false keeps the existing emptyDir for kind/CI/local-only
+# setups without a StorageClass. database_url in config above should
+# match the mount path either way (defaults already do).
+#
+# storageClass: empty = cluster default. accessMode is fixed to
+# ReadWriteOnce; the chart pins server.replicaCount and Recreate
+# strategy to enforce a single writer.
+#
+# helm.sh/resource-policy: keep on the PVC so `helm uninstall` does
+# not destroy lease state.
+# ---------------------------------------------------------------------------
+persistence:
+  enabled: true
+  storageClass: ""
+  size: 1Gi
+  accessMode: ReadWriteOnce
+  # Where the PVC mounts inside the pod. dbPath above must point at a
+  # file under this directory; the chart does not enforce this — it's
+  # the operator's responsibility to keep the two aligned.
+  mountPath: /app/data
+  # existingClaim: when set, the chart mounts this pre-existing PVC
+  # and does not create one of its own. Leave empty to let the
+  # chart create a PVC (requires persistence.enabled: true).
+  existingClaim: ""

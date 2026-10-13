@@ -1,0 +1,30 @@
+[project]
+name = "arkhai-kit-identity"
+version = "0.3.0"
+license = "MIT"
+description = "Canonical marketplace identities and authenticated envelopes"
+requires-python = ">=3.10,<3.14"
+dependencies = [
+    "cryptography>=43",
+    "eth-account>=0.13.0",
+    "keyring>=25.5",
+    "pydantic>=2",
+    "rfc8785>=0.1.4",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/market_identity"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+testpaths = ["tests/unit"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.4,<9.0.0",
+]

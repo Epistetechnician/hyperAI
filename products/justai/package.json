@@ -1,0 +1,18 @@
+{
+  "name": "justai",
+  "version": "0.1.0",
+  "private": true,
+  "description": "JustAI public-interest AI observatory contracts and static release tooling",
+  "scripts": {
+    "lint": "pnpm run lint:fast && pnpm run verify:full",
+    "lint:fast": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && python3 -m py_compile tools/source_intake.py tools/verify_monorepo.py tools/gcp_self_verify.py tools/multi_instance_self_verify.py apps/discovery/src/loop.py apps/platform/src/runtime.py apps/operations/src/recovery.py && node --check site/render.test.mjs",
+    "test:focused": "cargo test --workspace && python3 -m unittest discover -s tools/tests -p 'test_*.py' && python3 -m unittest discover -s tests -p 'test_*.py' && node --test site/render.test.mjs",
+    "verify:contracts": "cargo test --workspace && python3 tools/verify_monorepo.py && python3 -m unittest discover -s tests/contracts -p 'test_*.py'",
+    "verify:independent": "python3 tools/independent_validate.py --help >/dev/null",
+    "verify:full": "pnpm run test:focused && python3 tools/verify_monorepo.py && node --check site/render.mjs && python3 tools/source_intake.py --help >/dev/null && python3 tools/independent_validate.py --help >/dev/null && python3 tools/publish_release.py --help >/dev/null",
+    "render:check": "node site/render.mjs --help"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

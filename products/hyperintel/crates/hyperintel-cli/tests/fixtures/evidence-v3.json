@@ -1,0 +1,622 @@
+{
+  "assurance_blobs": {
+    "1183af01201b98e80482a0f3682187c18be37a6f6b2f1f09ca5b51a890416f00": [
+      115,
+      101,
+      114,
+      118,
+      105,
+      99,
+      101,
+      32,
+      109,
+      97,
+      110,
+      105,
+      102,
+      101,
+      115,
+      116,
+      32,
+      98,
+      105,
+      110,
+      100,
+      105,
+      110,
+      103
+    ],
+    "58817e1483ea86c4bb5a84cb47bbb9a2a1a0c0de0b7e7f42a1de273528f1c6a6": [
+      112,
+      114,
+      111,
+      118,
+      105,
+      100,
+      101,
+      114,
+      32,
+      97,
+      117,
+      116,
+      104,
+      111,
+      114,
+      105,
+      122,
+      97,
+      116,
+      105,
+      111,
+      110,
+      32,
+      49
+    ],
+    "c1abd333a25d504715dda6b0dec507134eccb562e32a511615c1639f753d18b5": [
+      112,
+      114,
+      111,
+      118,
+      105,
+      100,
+      101,
+      114,
+      32,
+      97,
+      117,
+      116,
+      104,
+      111,
+      114,
+      105,
+      122,
+      97,
+      116,
+      105,
+      111,
+      110,
+      32,
+      48
+    ]
+  },
+  "bundle": {
+    "assumptions": [
+      "capacity-offer authenticity is checked only against caller-supplied keys",
+      "reliability counts and source commitments are accepted only as verifier-signed supplied evidence"
+    ],
+    "assurance_sets": {
+      "c2f0ba1f9ad48cea158731197d24332e39477cf1e94672c15bdaafc575cc2f6b": {
+        "code_provenance_digest": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+        "envelope": {
+          "assumptions": [],
+          "exclusions": [],
+          "guarantees": [
+            {
+              "property": "PROVIDER_AUTHORIZATION",
+              "subject_digest": "db5210770f63d7e5875dd4a3ad1148f99f149d7f76cfbc15e072d0eb1a81f95e"
+            }
+          ],
+          "maturity": "DECLARED",
+          "schema_version": "hyperintel.assurance-envelope.v1",
+          "source_digests": [
+            "c1abd333a25d504715dda6b0dec507134eccb562e32a511615c1639f753d18b5"
+          ],
+          "trust_roots": [
+            {
+              "class": "PROVIDER_KEY",
+              "root_id": "key:alpha-offer"
+            }
+          ],
+          "valid": {
+            "end": "2026-07-21T00:00:00Z",
+            "start": "2026-07-20T00:00:00Z"
+          }
+        },
+        "evidence_blobs": [
+          {
+            "byte_length": 24,
+            "classification": "PUBLIC",
+            "digest": "c1abd333a25d504715dda6b0dec507134eccb562e32a511615c1639f753d18b5",
+            "digest_algorithm": "sha256",
+            "media_type": "application/json",
+            "storage_locator": "cas://sha256/c1abd333a25d504715dda6b0dec507134eccb562e32a511615c1639f753d18b5"
+          }
+        ],
+        "evidence_set_digest": "c2f0ba1f9ad48cea158731197d24332e39477cf1e94672c15bdaafc575cc2f6b",
+        "schema_version": "hyperintel.assurance-evidence-set.v1",
+        "signed_statements": [
+          {
+            "algorithm": "ed25519",
+            "assurance_envelope_digest": "1d95aa21d342b85e5804fe723eaf605bec1be858a06f822e7d63b305bc80b820",
+            "expires_at": "2026-07-21T00:00:00Z",
+            "issued_at": "2026-07-20T10:00:00Z",
+            "key_id": "key:alpha-offer",
+            "schema_version": "hyperintel.signed-statement.v1",
+            "sequence": 1,
+            "signature_hex": "e1f7a19c1a07b5acea548e70caa425f92bce1ef6dd0e4664c4e4806e446e068b3a750cca0715b3de992f3242234bdf159795399bb91ea23196ff74bdab4a2e0d",
+            "signer_id": "provider:alpha",
+            "subject_digest": "db5210770f63d7e5875dd4a3ad1148f99f149d7f76cfbc15e072d0eb1a81f95e",
+            "subject_kind": "provider-identity"
+          }
+        ]
+      },
+      "df1670ece8bbb3fc7b0402b1a65256df7f97b11c85d7564977a40b5bf2fa32fb": {
+        "code_provenance_digest": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+        "envelope": {
+          "assumptions": [],
+          "exclusions": [],
+          "guarantees": [
+            {
+              "property": "PROVIDER_AUTHORIZATION",
+              "subject_digest": "bcc836050bef556e67b349441b960d21808a2c7a7204a05f993091eb6d55168b"
+            }
+          ],
+          "maturity": "DECLARED",
+          "schema_version": "hyperintel.assurance-envelope.v1",
+          "source_digests": [
+            "58817e1483ea86c4bb5a84cb47bbb9a2a1a0c0de0b7e7f42a1de273528f1c6a6"
+          ],
+          "trust_roots": [
+            {
+              "class": "PROVIDER_KEY",
+              "root_id": "key:beta-offer"
+            }
+          ],
+          "valid": {
+            "end": "2026-07-21T00:00:00Z",
+            "start": "2026-07-20T00:00:00Z"
+          }
+        },
+        "evidence_blobs": [
+          {
+            "byte_length": 24,
+            "classification": "PUBLIC",
+            "digest": "58817e1483ea86c4bb5a84cb47bbb9a2a1a0c0de0b7e7f42a1de273528f1c6a6",
+            "digest_algorithm": "sha256",
+            "media_type": "application/json",
+            "storage_locator": "cas://sha256/58817e1483ea86c4bb5a84cb47bbb9a2a1a0c0de0b7e7f42a1de273528f1c6a6"
+          }
+        ],
+        "evidence_set_digest": "df1670ece8bbb3fc7b0402b1a65256df7f97b11c85d7564977a40b5bf2fa32fb",
+        "schema_version": "hyperintel.assurance-evidence-set.v1",
+        "signed_statements": [
+          {
+            "algorithm": "ed25519",
+            "assurance_envelope_digest": "d16feeae5c297e8b7ccda910ae4f42e7dc0b3af0765d8b173be6224e8e77dd20",
+            "expires_at": "2026-07-21T00:00:00Z",
+            "issued_at": "2026-07-20T10:00:00Z",
+            "key_id": "key:beta-offer",
+            "schema_version": "hyperintel.signed-statement.v1",
+            "sequence": 1,
+            "signature_hex": "01e98fe34bb5df2e6051d36f413f1c08ed45072d599b996f0760be5d22ae2edf3b487b297b3ae8f6a30b3cc29c3877e0c6e736366656ddba22ec29e9269d8608",
+            "signer_id": "provider:beta",
+            "subject_digest": "bcc836050bef556e67b349441b960d21808a2c7a7204a05f993091eb6d55168b",
+            "subject_kind": "provider-identity"
+          }
+        ]
+      },
+      "f4d700a863d05259eb932678c868a01862840ec556fb32975cd130a3a176c323": {
+        "code_provenance_digest": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+        "envelope": {
+          "assumptions": [],
+          "exclusions": [],
+          "guarantees": [
+            {
+              "property": "SERVICE_MANIFEST_BINDING",
+              "subject_digest": "fe0b6407e29abd3455ed06140753a167a79f9931bfb3d7a0a2697e55c62ca291"
+            }
+          ],
+          "maturity": "LOCALLY_CHECKED",
+          "schema_version": "hyperintel.assurance-envelope.v1",
+          "source_digests": [
+            "1183af01201b98e80482a0f3682187c18be37a6f6b2f1f09ca5b51a890416f00"
+          ],
+          "trust_roots": [
+            {
+              "class": "VERIFIER_KEY",
+              "root_id": "key:service-1"
+            }
+          ],
+          "valid": {
+            "end": "2026-07-21T00:00:00Z",
+            "start": "2026-07-20T00:00:00Z"
+          }
+        },
+        "evidence_blobs": [
+          {
+            "byte_length": 24,
+            "classification": "PUBLIC",
+            "digest": "1183af01201b98e80482a0f3682187c18be37a6f6b2f1f09ca5b51a890416f00",
+            "digest_algorithm": "sha256",
+            "media_type": "application/json",
+            "storage_locator": "cas://sha256/1183af01201b98e80482a0f3682187c18be37a6f6b2f1f09ca5b51a890416f00"
+          }
+        ],
+        "evidence_set_digest": "f4d700a863d05259eb932678c868a01862840ec556fb32975cd130a3a176c323",
+        "schema_version": "hyperintel.assurance-evidence-set.v1",
+        "signed_statements": [
+          {
+            "algorithm": "ed25519",
+            "assurance_envelope_digest": "bbc90a32dffc8666edf514d36ae4450fa1d6bcf5e8289b664dafef3a28d07dc7",
+            "expires_at": "2026-07-21T00:00:00Z",
+            "issued_at": "2026-07-20T10:00:00Z",
+            "key_id": "key:service-1",
+            "schema_version": "hyperintel.signed-statement.v1",
+            "sequence": 1,
+            "signature_hex": "cbfbd7dfc317479dc4630f3c20161d55bef8e244e205d38c9bdc4f8e3b7137f160b51417327ab16a028a4c554272c26db8429b8451ee333853aadc65c156f60c",
+            "signer_id": "verifier:service",
+            "subject_digest": "fe0b6407e29abd3455ed06140753a167a79f9931bfb3d7a0a2697e55c62ca291",
+            "subject_kind": "service-spec"
+          }
+        ]
+      }
+    },
+    "bundle_digest": "59db4b80a9fec85a2fa8e72d7e6cb36d446918c8a85a896883be7d83d50c8fbf",
+    "evaluated_at": "2026-07-20T12:00:00Z",
+    "explicit_nonclaims": [
+      "no-inference-execution",
+      "no-consumed-nonce-or-replay-state-enforcement",
+      "no-observation-source-verification-or-future-reliability-accuracy",
+      "no-provider-authentication-beyond-supplied-evidence",
+      "no-model-or-output-correctness",
+      "no-confidential-execution-claim",
+      "no-settlement-or-value-movement",
+      "no-hyperevm-contract-claim",
+      "no-independent-reproduction",
+      "no-production-readiness"
+    ],
+    "metering": {
+      "actual_provider_charge": 1117,
+      "authority_granted": false,
+      "buyer_observation_digest": "2121212121212121212121212121212121212121212121212121212121212121",
+      "completed_at": "2026-07-20T12:00:04Z",
+      "execution_status": "COMPLETED",
+      "first_token_at": "2026-07-20T12:00:02Z",
+      "input_tokens": 900,
+      "metering_method": "TOKENIZER_DIGEST",
+      "offer_digest": "f157e663ebc501e1fa5cb7f787091edcc4dcd83c5bc39b85c9d778d81d767180",
+      "output_digest": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+      "output_tokens": 400,
+      "prompt_digest": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+      "provider_id": "provider:beta",
+      "provider_identity_digest": "bcc836050bef556e67b349441b960d21808a2c7a7204a05f993091eb6d55168b",
+      "provider_metering_evidence_digest": "2020202020202020202020202020202020202020202020202020202020202020",
+      "receipt_digest": "6c848fb6a401c4eb8079921f0a391f47bbdf838a3aac302795b952b7ec2eab70",
+      "request_policy_digest": "1321bf51d55a119d7902019857b9057507d0ce49772adff6b62940d10fe62c50",
+      "route_decision_digest": "58929af6054c56eb99c0c7a6801c70811ca945043bd3d545387b623c230f4e2d",
+      "schema_version": "hyperintel.metering-receipt.v1",
+      "service_spec_digest": "fe0b6407e29abd3455ed06140753a167a79f9931bfb3d7a0a2697e55c62ca291",
+      "started_at": "2026-07-20T12:00:01Z",
+      "state_slice": "hyperintel-route-receipt-vertical-slice-v1"
+    },
+    "offers": [
+      {
+        "offer": {
+          "available_request_units": 10,
+          "fixed_request_fee": 1000,
+          "input_price_per_million": 10000,
+          "max_input_tokens": 4096,
+          "max_output_tokens": 1024,
+          "offer_id": "offer:alpha",
+          "output_price_per_million": 20000,
+          "p95_latency_ms": 5000,
+          "provider_id": "provider:alpha",
+          "region": "region:us-east",
+          "reliability_evidence_digest": "734852f297aa7d9b779548f209c290672402cfbc5ef4567810264f96c2073262",
+          "schema_version": "hyperintel.capacity-offer.v1",
+          "service_spec_digest": "fe0b6407e29abd3455ed06140753a167a79f9931bfb3d7a0a2697e55c62ca291",
+          "settlement_asset": "asset:test-usdc",
+          "success_probability": 800000,
+          "valid_from": "2026-07-20T00:00:00Z",
+          "valid_until": "2026-07-21T00:00:00Z"
+        },
+        "schema_version": "hyperintel.signed-capacity-offer.v1",
+        "statement": {
+          "algorithm": "ed25519",
+          "assurance_envelope_digest": "1d95aa21d342b85e5804fe723eaf605bec1be858a06f822e7d63b305bc80b820",
+          "expires_at": "2026-07-20T23:59:59Z",
+          "issued_at": "2026-07-20T10:00:00Z",
+          "key_id": "key:alpha-offer",
+          "schema_version": "hyperintel.signed-statement.v1",
+          "sequence": 1,
+          "signature_hex": "7571f8e11f4dddf18d285ca35b6ec985f6d4495db57d40aa3bded4813476eab854ff423ce9f21a330a32f23099c61f9b6dc91f17d550818c43f09305fe038909",
+          "signer_id": "provider:alpha",
+          "subject_digest": "e595629e73dac6bec2e34a09336df145cefd70359b831cf5aa347d6aa2178b4c",
+          "subject_kind": "capacity-offer"
+        }
+      },
+      {
+        "offer": {
+          "available_request_units": 10,
+          "fixed_request_fee": 1100,
+          "input_price_per_million": 10000,
+          "max_input_tokens": 4096,
+          "max_output_tokens": 1024,
+          "offer_id": "offer:beta",
+          "output_price_per_million": 20000,
+          "p95_latency_ms": 3000,
+          "provider_id": "provider:beta",
+          "region": "region:us-east",
+          "reliability_evidence_digest": "285feddb9407af039f26eac03d2eb6246a1b54dcf4eacc6f52fc06e6dbbc92f4",
+          "schema_version": "hyperintel.capacity-offer.v1",
+          "service_spec_digest": "fe0b6407e29abd3455ed06140753a167a79f9931bfb3d7a0a2697e55c62ca291",
+          "settlement_asset": "asset:test-usdc",
+          "success_probability": 990000,
+          "valid_from": "2026-07-20T00:00:00Z",
+          "valid_until": "2026-07-21T00:00:00Z"
+        },
+        "schema_version": "hyperintel.signed-capacity-offer.v1",
+        "statement": {
+          "algorithm": "ed25519",
+          "assurance_envelope_digest": "d16feeae5c297e8b7ccda910ae4f42e7dc0b3af0765d8b173be6224e8e77dd20",
+          "expires_at": "2026-07-20T23:59:59Z",
+          "issued_at": "2026-07-20T10:00:00Z",
+          "key_id": "key:beta-offer",
+          "schema_version": "hyperintel.signed-statement.v1",
+          "sequence": 2,
+          "signature_hex": "5f51898bf645f67d22084e3baf3aac8fb3d2bd70aa7bb403a01b85c7f2211a9c882948906347b2a6966290ee7d79aed7e03a300e6a9cc39f854fee473f0c1209",
+          "signer_id": "provider:beta",
+          "subject_digest": "f157e663ebc501e1fa5cb7f787091edcc4dcd83c5bc39b85c9d778d81d767180",
+          "subject_kind": "capacity-offer"
+        }
+      }
+    ],
+    "policy": {
+      "allowed_providers": [],
+      "allowed_regions": [
+        "region:us-east"
+      ],
+      "buyer_id": "buyer:demo",
+      "buyer_refund_account": "account:buyer-demo",
+      "denied_providers": [],
+      "max_input_tokens": 1000,
+      "max_output_tokens": 500,
+      "max_p95_latency_ms": 6000,
+      "max_total_cost": 2000,
+      "minimum_assurance_maturity": "DECLARED",
+      "minimum_privacy_mode": "DIRECT_SEALED",
+      "minimum_success_probability": 750000,
+      "nonce": 1,
+      "prompt_digest": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+      "protocol_fee": 400,
+      "protocol_fee_recipient": "account:hyperintel-fees",
+      "replay_snapshot_digest": "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c",
+      "request_id": "request:demo-1",
+      "required_assurance_properties": [
+        "PROVIDER_AUTHORIZATION",
+        "SERVICE_MANIFEST_BINDING"
+      ],
+      "required_capabilities": [
+        "STREAMING"
+      ],
+      "required_service_spec_digest": "fe0b6407e29abd3455ed06140753a167a79f9931bfb3d7a0a2697e55c62ca291",
+      "schema_version": "hyperintel.request-policy.v1",
+      "settlement_asset": "asset:test-usdc",
+      "valid_from": "2026-07-20T11:00:00Z",
+      "valid_until": "2026-07-20T13:00:00Z"
+    },
+    "providers": {
+      "provider:alpha": {
+        "authorized_service_digests": [
+          "fe0b6407e29abd3455ed06140753a167a79f9931bfb3d7a0a2697e55c62ca291"
+        ],
+        "offer_key_id": "key:alpha-offer",
+        "payout_account": "account:alpha",
+        "provider_id": "provider:alpha",
+        "receipt_key_id": "key:alpha-receipt",
+        "schema_version": "hyperintel.provider-identity.v1",
+        "status": "ACTIVE",
+        "valid_from": "2026-07-20T00:00:00Z",
+        "valid_until": "2026-07-21T00:00:00Z"
+      },
+      "provider:beta": {
+        "authorized_service_digests": [
+          "fe0b6407e29abd3455ed06140753a167a79f9931bfb3d7a0a2697e55c62ca291"
+        ],
+        "offer_key_id": "key:beta-offer",
+        "payout_account": "account:beta",
+        "provider_id": "provider:beta",
+        "receipt_key_id": "key:beta-receipt",
+        "schema_version": "hyperintel.provider-identity.v1",
+        "status": "ACTIVE",
+        "valid_from": "2026-07-20T00:00:00Z",
+        "valid_until": "2026-07-21T00:00:00Z"
+      }
+    },
+    "route": {
+      "authority_granted": false,
+      "candidates": [
+        {
+          "cost": {
+            "buyer_quote_max": 1061,
+            "expected_successful_cost": 1327,
+            "input_charge_max": 10,
+            "output_charge_max": 10,
+            "protocol_fee_max": 41,
+            "provider_quote_max": 1020
+          },
+          "eligibility_report_digest": "c7eef92b1b40b57e209b5e01fc078de6723efb8c1466425dd96095f9bd41957d",
+          "eligible": true,
+          "offer_digest": "e595629e73dac6bec2e34a09336df145cefd70359b831cf5aa347d6aa2178b4c",
+          "provider_id": "provider:alpha"
+        },
+        {
+          "cost": {
+            "buyer_quote_max": 1165,
+            "expected_successful_cost": 1177,
+            "input_charge_max": 10,
+            "output_charge_max": 10,
+            "protocol_fee_max": 45,
+            "provider_quote_max": 1120
+          },
+          "eligibility_report_digest": "6ae1cfc2a9e0335b5e5349209db3b13ebc612f56b8b501552325fba63e31120d",
+          "eligible": true,
+          "offer_digest": "f157e663ebc501e1fa5cb7f787091edcc4dcd83c5bc39b85c9d778d81d767180",
+          "provider_id": "provider:beta"
+        }
+      ],
+      "evaluated_at": "2026-07-20T12:00:00Z",
+      "replay_snapshot_digest": "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c",
+      "request_policy_digest": "1321bf51d55a119d7902019857b9057507d0ce49772adff6b62940d10fe62c50",
+      "route_digest": "58929af6054c56eb99c0c7a6801c70811ca945043bd3d545387b623c230f4e2d",
+      "routing_algorithm": "expected-successful-cost-reliability-artifact-v1",
+      "schema_version": "hyperintel.route-decision.v1",
+      "selected_cost": {
+        "buyer_quote_max": 1165,
+        "expected_successful_cost": 1177,
+        "input_charge_max": 10,
+        "output_charge_max": 10,
+        "protocol_fee_max": 45,
+        "provider_quote_max": 1120
+      },
+      "selected_offer_digest": "f157e663ebc501e1fa5cb7f787091edcc4dcd83c5bc39b85c9d778d81d767180",
+      "selected_provider_id": "provider:beta",
+      "selected_provider_identity_digest": "bcc836050bef556e67b349441b960d21808a2c7a7204a05f993091eb6d55168b",
+      "service_spec_digest": "fe0b6407e29abd3455ed06140753a167a79f9931bfb3d7a0a2697e55c62ca291",
+      "state_slice": "hyperintel-route-receipt-vertical-slice-v1"
+    },
+    "schema_version": "hyperintel.market-evidence-bundle.v3",
+    "service": {
+      "capabilities": [
+        "STREAMING",
+        "TOOL_CALLS"
+      ],
+      "max_input_tokens": 4096,
+      "max_output_tokens": 1024,
+      "metering_method": "TOKENIZER_DIGEST",
+      "model_artifact_digest": "0101010101010101010101010101010101010101010101010101010101010101",
+      "model_family": "model:open-70b",
+      "model_version": "version:1",
+      "privacy_mode": "DIRECT_SEALED",
+      "region": "region:us-east",
+      "retention_mode": "NO_CONTENT_RETENTION_DECLARED",
+      "runtime_image_digest": "0303030303030303030303030303030303030303030303030303030303030303",
+      "schema_version": "hyperintel.service-spec.v1",
+      "service_id": "service:open-70b-v1",
+      "tokenizer_digest": "0202020202020202020202020202020202020202020202020202020202020202"
+    },
+    "settlement": {
+      "authority_granted": false,
+      "buyer_refund_account": "account:buyer-demo",
+      "buyer_refund_amount": 838,
+      "escrow_amount": 2000,
+      "expires_at": "2026-07-20T13:00:00Z",
+      "idempotency_digest": "4f0ee2579dbc72d15c486dd1353473c37e96c3f64d95128e0290bb5ba7b06fcf",
+      "intent_digest": "8c49732b4bfe868663f627741a4fb3afce633f1bd9780f79528f358b8ec588b4",
+      "intent_id": "intent_4f0ee2579dbc72d15c486dd1353473c37e96c3f64d95128e0290bb5ba7b06fcf",
+      "metering_receipt_digest": "6c848fb6a401c4eb8079921f0a391f47bbdf838a3aac302795b952b7ec2eab70",
+      "protocol_fee_amount": 45,
+      "protocol_fee_recipient": "account:hyperintel-fees",
+      "provider_payout_account": "account:beta",
+      "provider_payout_amount": 1117,
+      "request_policy_digest": "1321bf51d55a119d7902019857b9057507d0ce49772adff6b62940d10fe62c50",
+      "route_decision_digest": "58929af6054c56eb99c0c7a6801c70811ca945043bd3d545387b623c230f4e2d",
+      "schema_version": "hyperintel.settlement-intent.v1",
+      "settlement_asset": "asset:test-usdc",
+      "state_slice": "hyperintel-route-receipt-vertical-slice-v1"
+    },
+    "state_slice": "hyperintel-route-receipt-vertical-slice-v1",
+    "verification_keys": [
+      {
+        "key_id": "key:alpha-offer",
+        "public_key_hex": "5e212c0980e4b39fc09721134aa02109374edfd260c0d3d03cb501c8d65457a9",
+        "revoked_at": null,
+        "signer_id": "provider:alpha",
+        "trust_root_class": "PROVIDER_KEY",
+        "valid_from": "2026-07-20T00:00:00Z",
+        "valid_until": "2026-07-22T00:00:00Z"
+      },
+      {
+        "key_id": "key:beta-offer",
+        "public_key_hex": "17cb79fb2b4120f2b1ec65e4198d6e08b28e813feb01e4a400839b85e18080ce",
+        "revoked_at": null,
+        "signer_id": "provider:beta",
+        "trust_root_class": "PROVIDER_KEY",
+        "valid_from": "2026-07-20T00:00:00Z",
+        "valid_until": "2026-07-22T00:00:00Z"
+      },
+      {
+        "key_id": "key:reliability-1",
+        "public_key_hex": "ee93a4f66f8d16b819bb9beb9ffccdfcdc1412e87fee6a324c2a99a1e0e67148",
+        "revoked_at": null,
+        "signer_id": "verifier:reliability",
+        "trust_root_class": "VERIFIER_KEY",
+        "valid_from": "2026-07-19T00:00:00Z",
+        "valid_until": "2026-07-22T00:00:00Z"
+      },
+      {
+        "key_id": "key:service-1",
+        "public_key_hex": "5526f742941711b3bc530ba44ff6f6dab0f0ab71af832f41a7fe3b9fdaed9c60",
+        "revoked_at": null,
+        "signer_id": "verifier:service",
+        "trust_root_class": "VERIFIER_KEY",
+        "valid_from": "2026-07-20T00:00:00Z",
+        "valid_until": "2026-07-22T00:00:00Z"
+      }
+    ]
+  },
+  "reliability_artifacts": {
+    "285feddb9407af039f26eac03d2eb6246a1b54dcf4eacc6f52fc06e6dbbc92f4": {
+      "artifact": {
+        "artifact_digest": "285feddb9407af039f26eac03d2eb6246a1b54dcf4eacc6f52fc06e6dbbc92f4",
+        "observation_policy_digest": "2828282828282828282828282828282828282828282828282828282828282828",
+        "observation_window_end": "2026-07-19T23:59:59Z",
+        "observation_window_start": "2026-07-18T00:00:00Z",
+        "observed_success_probability": 990000,
+        "probability_method": "OBSERVED_SUCCESS_FRACTION_FLOOR_PPM",
+        "provider_id": "provider:beta",
+        "schema_version": "hyperintel.reliability-artifact.v1",
+        "service_spec_digest": "fe0b6407e29abd3455ed06140753a167a79f9931bfb3d7a0a2697e55c62ca291",
+        "source_observation_digest": "2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a",
+        "successful_observations": 99,
+        "total_observations": 100,
+        "valid_from": "2026-07-20T00:00:00Z",
+        "valid_until": "2026-07-21T00:00:00Z"
+      },
+      "schema_version": "hyperintel.signed-reliability-artifact.v1",
+      "statement": {
+        "algorithm": "ed25519",
+        "artifact_digest": "285feddb9407af039f26eac03d2eb6246a1b54dcf4eacc6f52fc06e6dbbc92f4",
+        "expires_at": "2026-07-21T00:00:00Z",
+        "issued_at": "2026-07-20T00:00:00Z",
+        "key_id": "key:reliability-1",
+        "observation_policy_digest": "2828282828282828282828282828282828282828282828282828282828282828",
+        "schema_version": "hyperintel.reliability-verifier-statement.v1",
+        "sequence": 2,
+        "signature_hex": "47c985ca78cb7860f0bfbf8346feb40471bc0b3f2f882eb62bcc456b9c3b7748bb0ea1f3c06e0043186375abdbe108e0ba1d1ab6b646176d5b07d50a4617cf07",
+        "signer_id": "verifier:reliability"
+      }
+    },
+    "734852f297aa7d9b779548f209c290672402cfbc5ef4567810264f96c2073262": {
+      "artifact": {
+        "artifact_digest": "734852f297aa7d9b779548f209c290672402cfbc5ef4567810264f96c2073262",
+        "observation_policy_digest": "2828282828282828282828282828282828282828282828282828282828282828",
+        "observation_window_end": "2026-07-19T23:59:59Z",
+        "observation_window_start": "2026-07-18T00:00:00Z",
+        "observed_success_probability": 800000,
+        "probability_method": "OBSERVED_SUCCESS_FRACTION_FLOOR_PPM",
+        "provider_id": "provider:alpha",
+        "schema_version": "hyperintel.reliability-artifact.v1",
+        "service_spec_digest": "fe0b6407e29abd3455ed06140753a167a79f9931bfb3d7a0a2697e55c62ca291",
+        "source_observation_digest": "2929292929292929292929292929292929292929292929292929292929292929",
+        "successful_observations": 8,
+        "total_observations": 10,
+        "valid_from": "2026-07-20T00:00:00Z",
+        "valid_until": "2026-07-21T00:00:00Z"
+      },
+      "schema_version": "hyperintel.signed-reliability-artifact.v1",
+      "statement": {
+        "algorithm": "ed25519",
+        "artifact_digest": "734852f297aa7d9b779548f209c290672402cfbc5ef4567810264f96c2073262",
+        "expires_at": "2026-07-21T00:00:00Z",
+        "issued_at": "2026-07-20T00:00:00Z",
+        "key_id": "key:reliability-1",
+        "observation_policy_digest": "2828282828282828282828282828282828282828282828282828282828282828",
+        "schema_version": "hyperintel.reliability-verifier-statement.v1",
+        "sequence": 1,
+        "signature_hex": "f8f8169ce9a1c766f4b8d01b6e4b078939b3f268a6be728d7ea08d2e811ff9b159e2e20e3b1eba1588c7f75265e89c6f4139486bac70c78d06bd7a9f1e9eb408",
+        "signer_id": "verifier:reliability"
+      }
+    }
+  }
+}

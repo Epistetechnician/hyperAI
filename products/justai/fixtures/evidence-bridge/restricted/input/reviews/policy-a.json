@@ -1,0 +1,4 @@
+{
+  "schema": "justai.review_receipt.v1", "record_id": "review-restricted-policy-a", "state_slice": "justai-evidence-bridge-v1", "status": "IndependentlyVerified", "claim_ceiling": "review-attestation-only", "created_at": "2026-09-09T12:00:00Z", "publisher_id": "reviewer-coalition-a", "source_digests": [], "content_digest": "", "signature_refs": [],
+  "reviewer_id": "reviewer-a", "reviewer_org": "reviewer-coalition-a", "reviewed_record_id": "policy-restricted-demo", "reviewed_digest": "535b8245b494eeeb3bd346546e9bf460f5fb8ddccee151bf1fe7e9ec3963d05a", "syndicate_manifest_ref": "syndicate-reviewer-a-manifest", "result": "accept", "conflict_of_interest": false, "independence_basis": "Synthetic independent reviewer fixture; no implementation role."
+}

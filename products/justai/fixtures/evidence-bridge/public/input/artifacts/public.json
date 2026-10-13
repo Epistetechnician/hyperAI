@@ -1,0 +1,22 @@
+{
+  "schema": "justai.artifact_manifest.v1",
+  "record_id": "artifact-public-demo",
+  "state_slice": "justai-evidence-bridge-v1",
+  "status": "Corroborated",
+  "claim_ceiling": "bounded-observation-only",
+  "created_at": "2026-09-09T12:00:00Z",
+  "publisher_id": "justai-pilot-syndicate",
+  "source_digests": [],
+  "content_digest": "",
+  "signature_refs": [],
+  "artifact_kind": "dataset",
+  "access_class": "public",
+  "custody_mode": "reproducible",
+  "license_basis": "Synthetic public fixture; redistribution permitted for development tests.",
+  "custodian_id": "fixture-public-custodian",
+  "acquisition_timestamp": "2026-09-09T12:00:00Z",
+  "artifact_digest": "1111111111111111111111111111111111111111111111111111111111111111",
+  "permitted_uses": ["bounded-evaluation", "public-summary"],
+  "retention_and_disclosure_rules": "Retain the manifest and digest; publish only bounded observations.",
+  "evidence_basis": "open-reproducible"
+}

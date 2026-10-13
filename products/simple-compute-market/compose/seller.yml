@@ -1,0 +1,116 @@
+# Seller stack — services a seller (someone with compute to sell) runs in production.
+#
+# Two services:
+#   1. seller-storefront     — storefront HTTP server (arkhai:storefront).
+#                              Publishes offers, negotiates with buyers,
+#                              settles deals on chain.
+#   2. seller-provisioning   — runs ansible to create/destroy VMs on the
+#                              seller's KVM host (arkhai:compute-provisioning).
+#
+# This base file works in mock mode (no SSH key needed). For real KVM
+# provisioning add `-f compose/seller.live.yml` which mounts the SSH key
+# the ansible runner uses to reach the host. See docs/seller-quickstart.md §6.
+#
+# Operator-provided files (paths overridable via env):
+#   ./config.seller.toml     — seller config; see docs/seller-quickstart.md.
+#   ./resources.csv          — inventory CSV. Starter:
+#                              domains/vms/storefront/src/market_storefront/data/resources.sample.csv
+#
+# Required images (run `make build-seller` from the repo root):
+#   arkhai:storefront
+#   arkhai:compute-provisioning
+#
+# Registry: not included. Either run your own (see docs/indexer-quickstart.md)
+# or point [registry] urls in the seller TOML at an external indexer.
+#
+# Usage:
+#   docker compose -f compose/seller.yml up -d                          # mock mode
+#   docker compose -f compose/seller.yml -f compose/seller.live.yml up -d   # live KVM
+#   docker compose -f compose/seller.yml logs -f seller-storefront
+#
+# Environment overrides (all optional):
+#   SELLER_CONFIG_PATH       — path to seller TOML (default: ../config.seller.toml,
+#                              i.e. ./config.seller.toml relative to the project root)
+#   SELLER_RESOURCES_CSV     — path to inventory CSV (default: ../resources.csv)
+
+services:
+  # One-shot init containers that chown the named volumes to the
+  # appuser baked into each image. Docker creates fresh named volumes
+  # as root-owned; without this, sqlite init crashes at first start
+  # with "unable to open database file".
+  #
+  # Split per-image because `make build-seller-for-host` builds the
+  # provisioning image with the host's `ubuntu` uid/gid (often != 1000)
+  # to match the bind-mounted SSH key, while the storefront image
+  # stays on the default 1000:1000. Chowning by username (appuser)
+  # picks up the right uid in each image's /etc/passwd.
+  #
+  # Both exit successfully after one run; idempotent (chown -R no-ops
+  # on already-correct ownership).
+  seller-storefront-data-init:
+    image: arkhai:storefront
+    user: "0:0"
+    entrypoint: ["sh", "-c"]
+    command: ["chown -R appuser:appuser /data"]
+    volumes:
+      - seller-storefront-data:/data
+    restart: "no"
+
+  seller-provisioning-data-init:
+    image: arkhai:compute-provisioning
+    user: "0:0"
+    entrypoint: ["sh", "-c"]
+    command: ["chown -R appuser:appuser /data"]
+    volumes:
+      - seller-provisioning-data:/data
+    restart: "no"
+
+  seller-storefront:
+    image: arkhai:storefront
+    ports:
+      - "8001:8001"
+    # cap_add / devices / zerotier-seller volume below are for optional
+    # ZeroTier overlay networking. Harmless when [seller].zerotier_network
+    # is unset — the entrypoint fail-softs and continues.
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    depends_on:
+      seller-storefront-data-init:
+        condition: service_completed_successfully
+    env_file:
+      - ${SELLER_IDENTITY_ENV_FILE:?set marketplace signer credential environment file}
+    volumes:
+      - ${SELLER_CONFIG_PATH:-../config.seller.toml}:/etc/arkhai/storefront.toml:ro
+      - ${SELLER_RESOURCES_CSV:-../resources.csv}:/app/resources.csv:ro
+      - seller-storefront-data:/app/src/market_storefront/data/storefront
+      - zerotier-seller:/var/lib/zerotier-one
+    restart: unless-stopped
+
+  seller-provisioning:
+    image: arkhai:compute-provisioning
+    command: ["sh", "-c", "compute-provisioning-migrate && exec compute-provisioning-api"]
+    ports:
+      - "8081:8081"
+    depends_on:
+      seller-provisioning-data-init:
+        condition: service_completed_successfully
+    env_file:
+      - ${SELLER_PROVISIONING_IDENTITY_ENV_FILE:?set provisioning signer credential environment file}
+    environment:
+      - ACTIVE_PROFILES=seller
+      - PROVISIONING_IDENTITY__PRINCIPAL__SCHEME=${SELLER_PROVISIONING_IDENTITY_SCHEME:?set provisioning public identity scheme}
+      - PROVISIONING_IDENTITY__PRINCIPAL__IDENTIFIER=${SELLER_PROVISIONING_IDENTITY_IDENTIFIER:?set provisioning public identity identifier}
+      - 'PROVISIONING_STOREFRONT_IDENTITY__PRINCIPALS=[{"scheme":"${SELLER_IDENTITY_SCHEME:?set storefront public identity scheme}","identifier":"${SELLER_IDENTITY_IDENTIFIER:?set storefront public identity identifier}"}]'
+      - PROVISIONING_STOREFRONT_SITE_ID=default
+      - 'PROVISIONING_ADMIN_IDENTITY__PRINCIPALS=[{"scheme":"${SELLER_PROVISIONING_ADMIN_IDENTITY_SCHEME:?set provisioning admin public identity scheme}","identifier":"${SELLER_PROVISIONING_ADMIN_IDENTITY_IDENTIFIER:?set provisioning admin public identity identifier}"}]'
+    volumes:
+      - seller-provisioning-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  seller-storefront-data:
+  seller-provisioning-data:
+  zerotier-seller:

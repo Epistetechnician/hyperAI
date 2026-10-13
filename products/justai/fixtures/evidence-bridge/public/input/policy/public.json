@@ -1,0 +1,20 @@
+{
+  "schema": "justai.policy_trace.v1",
+  "record_id": "policy-public-demo",
+  "state_slice": "justai-evidence-bridge-v1",
+  "status": "Declared",
+  "claim_ceiling": "lawful-policy-traceability-only",
+  "created_at": "2026-09-09T12:00:00Z",
+  "publisher_id": "justai-pilot-syndicate",
+  "source_digests": ["1111111111111111111111111111111111111111111111111111111111111111"],
+  "content_digest": "",
+  "signature_refs": [],
+  "artifact_refs": ["artifact-public-demo"],
+  "evidence_refs": ["evaluation-public-demo"],
+  "evaluation_receipt_refs": ["evaluation-public-demo"],
+  "review_receipt_refs": ["review-public-policy-a", "review-public-policy-b"],
+  "claim_projection_refs": ["projection-public-demo"],
+  "demand": "Require publication of bounded evidence and the applicable uncertainty.",
+  "lawful_target": "The observatory publication process and its accountable publisher.",
+  "response": "Accept corrections through reviewed, digest-bound superseding records."
+}

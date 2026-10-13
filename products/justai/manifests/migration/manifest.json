@@ -1,0 +1,21 @@
+{
+  "schema": "justai.migration_manifest.v1",
+  "state_slice": "justai-governed-discovery-monorepo-v1",
+  "migration_mode": "clean-room-boundary-preserving",
+  "source_repositories_preserved": true,
+  "duplicate_ownership_check": "capability owners are unique; TypeScript packages are type-only projections",
+  "source_file_provenance_manifest": "manifests/migration/source-file-provenance.json",
+  "capabilities": [
+    {"capability": "canonical-json-and-cryptographic-contracts", "owner": "crates/justai-contracts", "state_slice": "justai-contracts-v1", "source_refs": ["ai-discovery-os:src/integration/coordinator.py", "composed-zk-benchmark-os:crates/zkbench-core/src/lib.rs"]},
+    {"capability": "governed-decision-records-and-path-classification", "owner": "apps/discovery/src/loop.py", "state_slice": "justai-discovery-v1", "source_refs": ["ai-discovery-os:src/contracts/__init__.py", "ai-discovery-os:src/phase_policy/policy.py"]},
+    {"capability": "falsifiable-intuition-and-dissent-projection", "owner": "crates/justai-contracts::governed", "state_slice": "justai-contracts-v1", "source_refs": ["ai-discovery-os:src/evidence_lane/contracts.py", "aligned-holistic-continual-learning:src/ahcl/verified_review.py"]},
+    {"capability": "evidence-and-custody-manifest", "owner": "crates/justai-contracts::governed::EvidenceManifest", "state_slice": "justai-custody-v1", "source_refs": ["security-alignment-os:src/custody.rs", "composed-platform:src/source_verification.rs"]},
+    {"capability": "replay-protected-receipts", "owner": "crates/security-broker", "state_slice": "justai-custody-v1", "source_refs": ["security-alignment-os:src/receipts.rs", "security-alignment-os:src/broker.rs"]},
+    {"capability": "subprocess-quarantine", "owner": "crates/subprocess-harness", "state_slice": "justai-operations-v1", "source_refs": ["recursive-meta-harness:crates/meta-harness-runtime/src/supervisor.rs", "recursive-meta-harness:docs/status.md"]},
+    {"capability": "project-isolation-and-reproducible-export", "owner": "apps/platform/src/runtime.py", "state_slice": "justai-platform-v1", "source_refs": ["composed-platform:src/storage.rs", "composed-platform:src/evidence_exchange.rs"]},
+    {"capability": "manual-fallback-and-local-recovery", "owner": "apps/operations/src/recovery.py", "state_slice": "justai-operations-v1", "source_refs": ["security-alignment-os:docs/custody-v1.md", "composed-platform:docs/rfcs/0048-local-storage-backup-restore.md"]},
+    {"capability": "infrastructure-state-classification", "owner": "apps/platform/src/runtime.py::HostedRuntime.status", "state_slice": "justai-infrastructure-v1", "source_refs": ["lusis-mesh:shared/mesh_runtime/deployment_compatibility.py", "lusis-mesh:shared/mesh_runtime/operator_identity.py"]},
+    {"capability": "multi-instance-local-quorum-verification", "owner": "tools/local_quorum.py", "state_slice": "justai-local-quorum-v1", "source_refs": []}
+  ],
+  "excluded_from_migration": ["credentials", "private implementation details", "hidden tests", "generated outputs", "raw traces", "datasets", "weights", "active services", "provider calls", "paid execution", "scientific assessment", "settlement", "release authority", "kill paths"]
+}

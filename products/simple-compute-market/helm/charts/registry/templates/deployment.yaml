@@ -1,0 +1,150 @@
+{{- $activeIdentity := .Values.global.registryIdentity -}}
+{{- if ne .Values.identity.authority $activeIdentity.authority -}}
+{{- fail "registry identity authority must match global.registryIdentity.authority" -}}
+{{- end -}}
+{{- if or (ne .Values.identity.principal.scheme $activeIdentity.principal.scheme) (ne .Values.identity.principal.identifier $activeIdentity.principal.identifier) -}}
+{{- fail "registry identity principal must match global.registryIdentity.principal" -}}
+{{- end -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "registry.fullname" . }}
+  labels:
+    {{- include "registry.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  # Recreate strategy: the indexer.db PVC is ReadWriteOnce; rolling
+  # updates would deadlock waiting for the old pod to release it.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "registry.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "registry.selectorLabels" . | nindent 8 }}
+    spec:
+      # fsGroup matches the container's appuser (UID 1000); without it
+      # the PVC's mount root is root-owned and SQLite can't write.
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: registry
+          image: {{ include "registry.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          env:
+            - name: REGISTRY_AUTHORITY_ID
+              value: {{ required "registry identity authority is required" $activeIdentity.authority | quote }}
+            - name: REGISTRY_AUTHORITY_SCHEME
+              value: {{ required "registry identity principal scheme is required" $activeIdentity.principal.scheme | quote }}
+            - name: REGISTRY_AUTHORITY_IDENTIFIER
+              value: {{ required "registry identity principal identifier is required" $activeIdentity.principal.identifier | quote }}
+            - name: REGISTRY_AUTHORITY_CREDENTIAL_FILE
+              value: /var/run/secrets/arkhai/registry-identity/credential
+            # --- sourced from subchart values ---
+            - name: DATABASE_URL
+              value: {{ .Values.config.databaseUrl | quote }}
+            - name: PORT
+              value: {{ .Values.service.port | quote }}
+            - name: HOST
+              value: {{ .Values.config.host | quote }}
+            - name: ENABLE_HEALTH_CHECKS
+              value: {{ .Values.config.enableHealthChecks | quote }}
+            - name: HEALTH_CHECK_INTERVAL
+              value: {{ .Values.config.healthCheckInterval | quote }}
+            - name: ENDPOINT_CHECK_TIMEOUT
+              value: {{ .Values.config.endpointCheckTimeout | quote }}
+            - name: HEARTBEAT_TTL_SECS
+              value: {{ .Values.config.heartbeatTtlSecs | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.config.logLevel | quote }}
+            # ROOT_PATH: gateway path prefix for this service. Used by the
+            # custom OpenAPI function to inject a servers block so Swagger UI
+            # generates correct curl examples behind the API gateway.
+            # Set via ops repo values overlay; empty for local dev.
+            - name: ROOT_PATH
+              value: {{ .Values.config.rootPath | default "" | quote }}
+            - name: REGISTRY_REQUIRE_READ_API_KEY
+              value: {{ .Values.config.requireReadApiKey | default false | quote }}
+            - name: REGISTRY_REQUIRE_WRITE_API_KEY
+              value: {{ .Values.config.requireWriteApiKey | default false | quote }}
+            {{- if ((.Values.auth).bootstrapKeySecret).name }}
+            - name: REGISTRY_BOOTSTRAP_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.bootstrapKeySecret.name | quote }}
+                  key: {{ .Values.auth.bootstrapKeySecret.key | quote }}
+            {{- end }}
+            {{- if ((.Values.auth).adminKeySecret).name }}
+            - name: REGISTRY_ADMIN_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.adminKeySecret.name | quote }}
+                  key: {{ .Values.auth.adminKeySecret.key | quote }}
+            {{- end }}
+            {{- if and ((.Values.global).rpc) ((.Values.global).rpc.enabled) }}
+            # Chain settings are mechanism/indexer inputs, not marketplace
+            # identity. Hosted-only registry profiles omit them completely.
+            - name: CHAIN_ID
+              value: {{ .Values.global.rpc.chainId | quote }}
+            {{- end }}
+          volumeMounts:
+            - name: arkhai-data
+              mountPath: {{ .Values.persistence.mountPath | quote }}
+            - name: registry-identity
+              mountPath: /var/run/secrets/arkhai/registry-identity
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        # SQLite indexer.db storage. Three modes:
+        #   existingClaim set → mount a Terraform-managed PVC by name
+        #   persistence.enabled → chart creates and owns the PVC
+        #   neither           → emptyDir (pod-lifetime, CI/local only)
+        - name: arkhai-data
+          {{- if .Values.persistence.existingClaim }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.existingClaim | quote }}
+          {{- else if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "registry.pvcName" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: registry-identity
+          secret:
+            secretName: {{ required "registry identity credential Secret name is required" .Values.identity.credentialSecret.name | quote }}
+            items:
+              - key: {{ required "registry identity credential Secret key is required" .Values.identity.credentialSecret.key | quote }}
+                path: credential
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

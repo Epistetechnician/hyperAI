@@ -1,0 +1,20 @@
+{
+  "schema": "justai.disclosure_decision.v1",
+  "record_id": "disclosure-public-demo",
+  "state_slice": "justai-evidence-bridge-v1",
+  "status": "Published",
+  "claim_ceiling": "bounded-observation-only",
+  "created_at": "2026-09-09T12:00:00Z",
+  "publisher_id": "justai-pilot-syndicate",
+  "source_digests": ["1111111111111111111111111111111111111111111111111111111111111111"],
+  "content_digest": "",
+  "signature_refs": [],
+  "subject_refs": ["evaluation-public-demo"],
+  "decision": "public",
+  "reason": "The synthetic fixture contains no confidential material.",
+  "public_summary": "Publish the bounded observation and its uncertainty.",
+  "withheld_material": "None; no raw artifact is included in the release.",
+  "missing_information": "No external validation is represented.",
+  "contestation": "Any reader may challenge the fixture interpretation through a superseding dispute record.",
+  "review_receipt_refs": ["review-public-disclosure-a", "review-public-disclosure-b"]
+}

@@ -1,0 +1,263 @@
+name: Publish Python packages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'kit/**'
+      - 'core/**'
+      - 'domains/vms/**'
+      - 'domains/apicredits/**'
+      - 'domains/bare_metal/**'
+      - '.github/workflows/publish-pypi.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: publish-pypi
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+# Trusted publishing (OIDC, no secrets needed). One PyPI project + GitHub
+# environment per package; configure each at
+# https://pypi.org/manage/project/<dist>/settings/publishing/ with:
+#   Owner       = arkhai-io
+#   Repo        = simple-compute-market
+#   Workflow    = publish-pypi.yml
+#   Environment = pypi-<dist>            (matches `environment.name` below)
+# and create the matching repo environment under Settings -> Environments.
+# See docs/development/RELEASING.md for the full package table.
+#
+# Distribution names keep the `arkhai-` prefix: PyPI organizations group
+# projects at the account level but do NOT namespace distribution names,
+# so the prefix is the project's de-facto namespace (and several bare
+# names like `core` are already taken by unrelated projects).
+#
+# This workflow publishes every consumable library / SDK / plugin. The
+# package set is a single source of truth: the PACKAGES table in
+# build-matrix below and the per-package path filters above it. Service
+# apps deployed only via Docker/Helm (the registry indexer), the e2e
+# harness, the sample app, and internal tooling are intentionally absent.
+#
+# Internal build order does not matter: each wheel is built with
+# `uv build --no-sources` in an isolated build env that installs only the
+# build backend, never the project's own (arkhai-*) dependencies, so no
+# sibling package needs to be on PyPI first. A full `workflow_dispatch`
+# publishes the whole set in one run; because deps use lower-bound
+# constraints, the brief window where a downstream wheel is on PyPI before
+# its dependency is self-heals once the run finishes.
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        if: github.event_name != 'workflow_dispatch'
+        with:
+          # Each filter watches its package directory plus the workflow
+          # file (so editing the pipeline re-evaluates every package).
+          # A publish only happens when the version isn't yet on PyPI,
+          # and a version bump always lands in <path>/pyproject.toml, so
+          # watching the package's own directory is sufficient — changes
+          # to shared sibling modules without a bump would skip anyway.
+          filters: |
+            kit-alkahest: ['kit/alkahest/**', '.github/workflows/publish-pypi.yml']
+            kit-config: ['kit/config/**', '.github/workflows/publish-pypi.yml']
+            kit-identity: ['kit/identity/**', '.github/workflows/publish-pypi.yml']
+            kit-policy: ['kit/policy/**', '.github/workflows/publish-pypi.yml']
+            kit-settlement-runtime: ['kit/settlement-runtime/**', '.github/workflows/publish-pypi.yml']
+            kit-negotiation-runtime: ['kit/negotiation-runtime/**', '.github/workflows/publish-pypi.yml']
+            kit-hosted-settlement: ['kit/hosted-settlement/**', 'manifests/**', '.github/workflows/publish-pypi.yml']
+            core: ['core/src/**', 'core/pyproject.toml', 'core/README.md', '.github/workflows/publish-pypi.yml']
+            core-buyer: ['core/buyer/**', '.github/workflows/publish-pypi.yml']
+            core-storefront: ['core/storefront/**', '.github/workflows/publish-pypi.yml']
+            core-storefront-client: ['core/storefront-client/**', '.github/workflows/publish-pypi.yml']
+            core-registry-client: ['core/registry-client/**', '.github/workflows/publish-pypi.yml']
+            core-registry: ['core/registry/**', '.github/workflows/publish-pypi.yml']
+            kit-site: ['kit/site/**', '.github/workflows/publish-pypi.yml']
+            kit-site-client: ['kit/site-client/**', '.github/workflows/publish-pypi.yml']
+            bare-metal: ['domains/bare_metal/pyproject.toml', 'domains/bare_metal/src/**', 'domains/bare_metal/tests/**', '.github/workflows/publish-pypi.yml']
+            bare-metal-storefront: ['domains/bare_metal/storefront/**', '.github/workflows/publish-pypi.yml']
+            bare-metal-provisioning-adapter: ['domains/bare_metal/provisioning/adapter/**', '.github/workflows/publish-pypi.yml']
+            vms: ['domains/vms/domain/**', '.github/workflows/publish-pypi.yml']
+            vms-buyer: ['domains/vms/buyer/**', '.github/workflows/publish-pypi.yml']
+            vms-provisioning-adapter: ['domains/vms/provisioning/adapter/**', '.github/workflows/publish-pypi.yml']
+            compute-provisioning-service: ['provisioning/compute/service/**', '.github/workflows/publish-pypi.yml']
+            vms-storefront: ['domains/vms/storefront/**', '.github/workflows/publish-pypi.yml']
+            apicredits-domain: ['domains/apicredits/pyproject.toml', 'domains/apicredits/src/**', 'domains/apicredits/tests/**', '.github/workflows/publish-pypi.yml']
+            apicredits-buyer: ['domains/apicredits/buyer/**', '.github/workflows/publish-pypi.yml']
+            apicredits-middleware: ['domains/apicredits/middleware/python/**', '.github/workflows/publish-pypi.yml']
+            apicredits-storefront: ['domains/apicredits/storefront/**', '.github/workflows/publish-pypi.yml']
+            apicredits-service: ['domains/apicredits/service/**', '.github/workflows/publish-pypi.yml']
+      - name: Build publish matrix
+        id: build-matrix
+        env:
+          DISPATCH: ${{ github.event_name == 'workflow_dispatch' }}
+          CHANGES: ${{ steps.filter.outputs.changes }}
+        run: |
+          set -euo pipefail
+          # Single source of truth: key (must match a filter name above),
+          # package directory, and PyPI distribution name.
+          cat > packages.json <<'JSON'
+          [
+            {"key": "kit-alkahest",           "path": "kit/alkahest",                     "dist": "arkhai-kit-alkahest"},
+            {"key": "kit-config",             "path": "kit/config",                       "dist": "arkhai-kit-config"},
+            {"key": "kit-identity",           "path": "kit/identity",                     "dist": "arkhai-kit-identity"},
+            {"key": "kit-policy",             "path": "kit/policy",                       "dist": "arkhai-kit-policy"},
+            {"key": "kit-settlement-runtime", "path": "kit/settlement-runtime",               "dist": "arkhai-kit-settlement-runtime"},
+            {"key": "kit-negotiation-runtime", "path": "kit/negotiation-runtime",             "dist": "arkhai-kit-negotiation-runtime"},
+            {"key": "kit-hosted-settlement",  "path": "kit/hosted-settlement",            "dist": "arkhai-kit-hosted-settlement"},
+            {"key": "core",                   "path": "core",                             "dist": "arkhai-core"},
+            {"key": "core-buyer",             "path": "core/buyer",                       "dist": "arkhai-core-buyer"},
+            {"key": "core-storefront",        "path": "core/storefront",                  "dist": "arkhai-core-storefront"},
+            {"key": "core-storefront-client", "path": "core/storefront-client",           "dist": "arkhai-core-storefront-client"},
+            {"key": "core-registry-client",   "path": "core/registry-client",             "dist": "arkhai-core-registry-client"},
+            {"key": "core-registry",          "path": "core/registry",                    "dist": "arkhai-core-registry"},
+            {"key": "kit-site",              "path": "kit/site",                        "dist": "arkhai-kit-site"},
+            {"key": "kit-site-client",       "path": "kit/site-client",                 "dist": "arkhai-kit-site-client"},
+            {"key": "bare-metal",            "path": "domains/bare_metal",              "dist": "arkhai-bare-metal"},
+            {"key": "bare-metal-storefront", "path": "domains/bare_metal/storefront",   "dist": "arkhai-bare-metal-storefront"},
+            {"key": "bare-metal-provisioning-adapter", "path": "domains/bare_metal/provisioning/adapter", "dist": "arkhai-bare-metal-provisioning-adapter"},
+            {"key": "vms",                   "path": "domains/vms/domain",              "dist": "arkhai-vms"},
+            {"key": "vms-buyer",              "path": "domains/vms/buyer",                "dist": "arkhai-vms-buyer", "wheel_only": true},
+            {"key": "vms-provisioning-adapter", "path": "domains/vms/provisioning/adapter", "dist": "arkhai-vms-provisioning-adapter"},
+            {"key": "compute-provisioning-service", "path": "provisioning/compute/service", "dist": "arkhai-compute-provisioning-service"},
+            {"key": "vms-storefront",         "path": "domains/vms/storefront",           "dist": "arkhai-vms-storefront", "wheel_only": true},
+            {"key": "apicredits-domain",       "path": "domains/apicredits",               "dist": "arkhai-apicredits-domain"},
+            {"key": "apicredits-buyer",        "path": "domains/apicredits/buyer",          "dist": "arkhai-apicredits-buyer", "wheel_only": true},
+            {"key": "apicredits-middleware",   "path": "domains/apicredits/middleware/python", "dist": "arkhai-apicredits-middleware"},
+            {"key": "apicredits-storefront",   "path": "domains/apicredits/storefront",     "dist": "arkhai-apicredits-storefront"},
+            {"key": "apicredits-service",      "path": "domains/apicredits/service",        "dist": "arkhai-apicredits-service"}
+          ]
+          JSON
+
+          if [ "${DISPATCH}" = "true" ]; then
+            # Manual run: consider every package (the per-package version
+            # check then skips anything already on PyPI).
+            selected=$(jq -c '.' packages.json)
+          else
+            # Push: select only packages whose filter matched.
+            selected=$(jq -c --argjson ch "${CHANGES:-[]}" \
+              '[ .[] | select(.key as $k | $ch | index($k)) ]' packages.json)
+          fi
+
+          echo "matrix={\"include\":${selected}}" >> "$GITHUB_OUTPUT"
+          echo "Selected for publish:"
+          echo "${selected}" | jq -r 'if length == 0 then "  (none)" else .[].dist end'
+
+  publish:
+    needs: detect-changes
+    if: ${{ fromJson(needs.detect-changes.outputs.matrix).include[0] != null }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix: ${{ fromJson(needs.detect-changes.outputs.matrix) }}
+    environment:
+      name: pypi-${{ matrix.dist }}
+      url: https://pypi.org/p/${{ matrix.dist }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.8.13"
+      - name: Skip if version already on PyPI
+        id: check
+        env:
+          PKG_DIR: ${{ matrix.path }}
+          DIST: ${{ matrix.dist }}
+        run: |
+          set -euo pipefail
+          version=$(awk -F'"' '/^version *= */{print $2; exit}' "${PKG_DIR}/pyproject.toml")
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          if curl -sSL "https://pypi.org/pypi/${DIST}/json" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if '${version}' in d.get('releases', {}) else 1)"; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::${DIST} ${version} already on PyPI; skipping"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::publishing ${DIST} ${version}"
+          fi
+      # Read the trust configuration for the version this source pins, not one
+      # named here. Naming the file was already half-derived -- the repository,
+      # the tag and the artifact names came out of the JSON -- so the filename
+      # was the only stale part, and it was enough: it kept pointing at v0.2.1
+      # after the pin moved to v0.4.2, which would have staged one release's
+      # assets for a wheel built against another and failed in the verifier.
+      - name: Select the hosted release this source binds
+        id: hosted
+        if: steps.check.outputs.skip == 'false' && matrix.dist == 'arkhai-kit-hosted-settlement'
+        run: python scripts/select-hosted-client-channel.py >>"$GITHUB_OUTPUT"
+      # The producer repository is private and this one is public, so the
+      # workspace token cannot see it: GitHub answers a private release with
+      # `release not found`, which reads as a missing tag and is really a
+      # missing permission. `release.yml` has always used the producer token
+      # for exactly this; this job was reaching for the release with the one
+      # token that cannot reach it.
+      - name: Download exact hosted release assets
+        if: steps.hosted.outputs.channel == 'release'
+        env:
+          GH_TOKEN: ${{ secrets.HOSTED_RELEASE_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "::error::HOSTED_RELEASE_TOKEN is unset; the private producer release cannot be read"
+            exit 1
+          fi
+          mkdir -p .dist
+          gh release download "v${{ steps.hosted.outputs.version }}" \
+            --repo "${{ steps.hosted.outputs.repository }}" --dir .dist \
+            --pattern "${{ steps.hosted.outputs.manifest }}" \
+            --pattern "${{ steps.hosted.outputs.wheel }}" \
+            --pattern "openapi-v${{ steps.hosted.outputs.version }}.json" \
+            --pattern "conformance-v${{ steps.hosted.outputs.version }}.json" \
+            --pattern "migrations-v${{ steps.hosted.outputs.schema_version }}.json" \
+            --pattern "sbom.spdx.json" \
+            --pattern "provenance.intoto.json"
+      # An unsigned pin has nothing signed to verify. `make verify-hosted-release`
+      # says exactly that and succeeds, so the wheel this job publishes is built
+      # against a client it cannot vouch for -- which is the internal channel
+      # working as designed, not something to hide behind a passing step.
+      - name: Verify staged hosted client release
+        if: steps.check.outputs.skip == 'false' && matrix.dist == 'arkhai-kit-hosted-settlement'
+        run: make verify-hosted-release HOSTED_RELEASE_TRUST="${{ steps.hosted.outputs.trust }}"
+      # Four published packages point `tool.uv.find-links` at the repository's
+      # .dist so a local build resolves sibling arkhai-* wheels from there.
+      # uv reads that directory even under --no-sources, and a fresh checkout
+      # has no .dist at all, so the build died before it started -- reported as
+      # a bare `No such file or directory (os error 2)` naming a path nobody
+      # asked for. Empty is the right state here rather than merely a tolerable
+      # one: a published wheel must record plain PyPI dependencies, so there is
+      # nothing a publish build should be resolving locally. The hosted client
+      # job fills the same directory on purpose, and only it should.
+      - name: Ensure the local wheel directory exists but is empty
+        if: steps.check.outputs.skip == 'false' && matrix.dist != 'arkhai-kit-hosted-settlement'
+        run: mkdir -p .dist
+      - name: Build distribution
+        if: steps.check.outputs.skip == 'false'
+        working-directory: ${{ matrix.path }}
+        # --no-sources strips tool.uv.sources overrides so the wheel records
+        # plain PyPI deps instead of workspace paths.
+        #
+        # wheel_only packages (the buyer plugins) force-include sibling
+        # concept modules via ../ paths, which an sdist tarball can't carry
+        # — `uv build`'s default sdist->wheel rebuild would fail — so they
+        # publish a wheel built directly from source. Everything else ships
+        # sdist + wheel.
+        run: |
+          if [ "${{ matrix.wheel_only }}" = "true" ]; then
+            uv build --wheel --no-sources
+          else
+            uv build --no-sources
+          fi
+      - name: Publish to PyPI
+        if: steps.check.outputs.skip == 'false'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: ${{ matrix.path }}/dist

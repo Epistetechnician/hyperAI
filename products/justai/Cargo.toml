@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "crates/justai-contracts",
+    "crates/security-broker",
+    "crates/subprocess-harness",
+]
+resolver = "2"

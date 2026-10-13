@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://justai.org/schemas/justai.v1/evidence-bridge.schema.json",
+  "title": "JustAI evidence bridge records",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema", "record_id", "state_slice", "status", "claim_ceiling", "created_at", "publisher_id", "source_digests", "content_digest", "signature_refs"],
+  "properties": {
+    "schema": {"enum": ["justai.artifact_manifest.v1", "justai.evaluation_receipt.v1", "justai.disclosure_decision.v1", "justai.claim_projection.v1", "justai.policy_trace.v1"]},
+    "record_id": {"type": "string", "minLength": 1},
+    "state_slice": {"const": "justai-evidence-bridge-v1"},
+    "status": {"type": "string", "minLength": 1},
+    "claim_ceiling": {"type": "string", "minLength": 1},
+    "created_at": {"type": "string", "format": "date-time"},
+    "publisher_id": {"type": "string", "minLength": 1},
+    "source_digests": {"type": "array", "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}},
+    "content_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "signature_refs": {"type": "array", "items": {"$ref": "signature-ref.schema.json"}},
+    "access_class": {"enum": ["public", "restricted", "protected"]},
+    "custody_mode": {"enum": ["reproducible", "attested", "corroborated", "unknown"]},
+    "artifact_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "environment_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "runner_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "observed_result_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  },
+  "allOf": [
+    {"if": {"properties": {"schema": {"const": "justai.artifact_manifest.v1"}}}, "then": {"required": ["artifact_kind", "access_class", "custody_mode", "license_basis", "custodian_id", "acquisition_timestamp", "artifact_digest", "permitted_uses", "retention_and_disclosure_rules", "evidence_basis"]}},
+    {"if": {"properties": {"schema": {"const": "justai.evaluation_receipt.v1"}}}, "then": {"required": ["artifact_manifest_refs", "authorization_ref", "evaluation_scope", "environment_digest", "runner_digest", "resource_limits", "observed_result_digest", "observed_result_summary", "evidence_basis", "uncertainty", "nonclaims", "review_receipt_refs", "disclosure_decision_refs"]}},
+    {"if": {"properties": {"schema": {"const": "justai.disclosure_decision.v1"}}}, "then": {"required": ["subject_refs", "decision", "reason", "public_summary", "withheld_material", "missing_information", "contestation", "review_receipt_refs"]}},
+    {"if": {"properties": {"schema": {"const": "justai.claim_projection.v1"}}}, "then": {"required": ["evidence_refs", "public_summary", "uncertainty", "nonclaims", "missing_information", "contestation", "disclosure_decision_refs", "review_receipt_refs"]}},
+    {"if": {"properties": {"schema": {"const": "justai.policy_trace.v1"}}}, "then": {"required": ["artifact_refs", "evidence_refs", "evaluation_receipt_refs", "review_receipt_refs", "claim_projection_refs", "demand", "lawful_target", "response"]}}
+  ]
+}

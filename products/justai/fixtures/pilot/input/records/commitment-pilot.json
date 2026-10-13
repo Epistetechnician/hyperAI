@@ -1,0 +1,19 @@
+{
+  "schema": "justai.commitment.v1",
+  "record_id": "commitment-pilot-001",
+  "state_slice": "justai-public-observatory-v1",
+  "status": "Declared",
+  "claim_ceiling": "locator-only-development-pilot",
+  "created_at": "2026-09-09T12:00:00Z",
+  "publisher_id": "justai-pilot-syndicate",
+  "source_digests": ["775154f6df3b098bbf6de4e98d87c434813626e2c058ad7234310b2f94b4e2af"],
+  "content_digest": "",
+  "signature_refs": [],
+  "issuer": "justai-pilot-syndicate",
+  "commitment": "Keep uncertainty and contestation visible in public releases.",
+  "metric": "Every pilot record exposes status, claim ceiling, provenance, and review references.",
+  "deadline": "2026-09-09",
+  "verification_status": "Declared for development fixture only",
+  "evidence_refs": ["claim-pilot-001", "incident-pilot-001"],
+  "review_receipt_refs": ["review-commitment-a", "review-commitment-b"]
+}

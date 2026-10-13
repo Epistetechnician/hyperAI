@@ -1,0 +1,19 @@
+rpc:
+  url: "https://staging-rpc.example.com" # Add url for node or provider such as Alchemy
+  chain_id: 11155111   # Sepolia
+
+registry:
+  api_url: "http://registry:8080"
+
+# Update for each client and then create file as Kubernetes secret
+buyer:
+  marketplace_credential:
+  private_key:
+  wallet_address: "0x0000000000000000000000000000000000000000"
+
+seller:
+  private_key:
+  wallet_address: "0x0000000000000000000000000000000000000000"
+
+provisioning:
+  api_url: "http://provisioning:8081"

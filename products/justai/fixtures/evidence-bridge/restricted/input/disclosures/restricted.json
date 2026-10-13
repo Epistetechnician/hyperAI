@@ -1,0 +1,20 @@
+{
+  "schema": "justai.disclosure_decision.v1",
+  "record_id": "disclosure-restricted-demo",
+  "state_slice": "justai-evidence-bridge-v1",
+  "status": "Published",
+  "claim_ceiling": "bounded-observation-only",
+  "created_at": "2026-09-09T12:00:00Z",
+  "publisher_id": "justai-pilot-syndicate",
+  "source_digests": ["2222222222222222222222222222222222222222222222222222222222222222"],
+  "content_digest": "",
+  "signature_refs": [],
+  "subject_refs": ["evaluation-restricted-demo"],
+  "decision": "aggregate_only",
+  "reason": "The artifact is restricted and raw material must not cross the public seam.",
+  "public_summary": "Publish only the bounded aggregate observation, custody basis, uncertainty, and nonclaims.",
+  "withheld_material": "Raw restricted bytes, identifying details, and any exploit or proprietary detail.",
+  "missing_information": "Public readers cannot reproduce the restricted evaluation from the published release.",
+  "contestation": "Affected parties and reviewers may challenge the receipt without receiving unauthorized access.",
+  "review_receipt_refs": ["review-restricted-disclosure-a", "review-restricted-disclosure-b"]
+}

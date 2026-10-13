@@ -1,0 +1,20 @@
+{
+  "schema": "justai.review_receipt.v1",
+  "record_id": "review-claim-a",
+  "state_slice": "justai-public-observatory-v1",
+  "status": "IndependentlyVerified",
+  "claim_ceiling": "review-attestation-only",
+  "created_at": "2026-09-09T12:00:00Z",
+  "publisher_id": "reviewer-coalition-a",
+  "source_digests": [],
+  "content_digest": "",
+  "signature_refs": [],
+  "reviewer_id": "reviewer-a",
+  "reviewer_org": "reviewer-coalition-a",
+  "reviewed_record_id": "claim-pilot-001",
+  "reviewed_digest": "c6819cb5214b966012863d5daa15c2ac36207d7271a74f99201db08c9afe15a4",
+  "syndicate_manifest_ref": "syndicate-reviewer-a-manifest",
+  "result": "accept",
+  "conflict_of_interest": false,
+  "independence_basis": "Separate development reviewer; fixture scope only."
+}

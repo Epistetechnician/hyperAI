@@ -1,0 +1,215 @@
+global:
+  registryIdentity:
+    authority: registry-a
+    principal:
+      scheme: eip191
+      identifier: "0x90f79bf6eb2c4f870365e785982e1f101e93b906"
+  provisioningIdentity:
+    scheme: eip191
+    identifier: "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+
+# Default values for the storefront subchart.
+# Overridden by the parent chart's storefront: block in helm/values.yaml.
+# Values sourced from global (rpc, registry addresses) are injected in
+# the templates and do not appear here.
+
+image:
+  repository: ""
+  name: arkhai
+  tag: storefront
+  # Production/release profiles pin sha256:<digest>; local development may use tag.
+  digest: ""
+  settlementConfigSchemaVersion: 1
+  pullPolicy: IfNotPresent
+
+# ---------------------------------------------------------------------------
+# Storefront agent(s). The list models per-process identity, not role —
+# only sellers run a storefront, so the typical deploy has one entry.
+# Operators running multiple seller identities on one cluster (sharded
+# by region, by hardware fleet, etc.) add more entries. Buyers do not
+# appear here at all: the buyer-side surface is the `market` CLI, run
+# as a one-shot client process (or a Job for E2E tests).
+#
+# Each entry renders one Deployment and Service. Public identity configuration
+# is rendered into a ConfigMap; signer material is read only from the referenced
+# Kubernetes Secret.
+agents:
+  - name: bob
+    port: 8001
+    component: seller
+    # agentId: the numeric on-chain agent ID assigned at first registration.
+    # Leave empty on first deploy — the service will register automatically
+    # (requires autoRegister: true) and print the assigned ID in the logs.
+    # Pin this value after first registration to skip re-registration on
+    # subsequent deploys and to guard against accidental new registrations.
+    agentId: ""
+    # autoRegister: controls behaviour when agentId is not set.
+    #   true  → register at startup (default; safe for first deploys).
+    #   false → crash loudly if agentId is missing. Use this once an agent
+    #           has been registered to prevent a misconfigured deploy from
+    #           silently minting a new on-chain identity.
+    autoRegister: true
+    identity:
+      principal:
+        scheme: eip191
+        identifier: "0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc"
+      credentialSecret:
+        name: arkhai-bob-identity
+        key: credential
+      servicePeers:
+        provisioning_default:
+          role: service
+          siteId: default
+          principals:
+            - scheme: eip191
+              identifier: "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+      administrators:
+        operator:
+          principals:
+            - scheme: eip191
+              identifier: "0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc"
+    # Non-identity runtime secrets remain in a separately managed overlay.
+    # The chart never accepts or renders private signing material.
+    secret:
+      createSecret: false
+      secretName: arkhai-bob-runtime
+      configKey: storefront.secrets.toml
+      # Compute resource inventory as raw CSV content. Injected at startup
+      # when the resources table is empty (idempotent — skipped on restart
+      # if resources are already present). Use make deploy with
+      # RESOURCES_CSV_FILE=/path/to/resources.csv to set this via --set-file.
+      # Leave empty to start with no inventory (seed via the import API later).
+      resourcesCsvInline: ""
+      # Write-scoped API key for the listing registry, rendered into the
+      # secrets TOML as [registry.auth] keyed by the composed registry URL.
+      # Required when the registry sets requireWriteApiKey. Never commit a
+      # real token; inject via --set at render/deploy time.
+      registryAuthToken: ""
+      # Hosted requests use the marketplace signer supplied by
+      # identity.credentialSecret; no second credential is accepted here.
+    # config.* lands in the public storefront.toml ConfigMap. Private identity
+    # and wallet credentials are accepted only through Secret references.
+    config:
+      storefrontDomains:
+        - contribution: vms
+          offeringMode: vm
+          domainIdentity: compute.v1
+          contractVersion: "1.0"
+        - contribution: bare_metal
+          offeringMode: bare_metal
+          domainIdentity: bare_metal.v1
+          contractVersion: "1.0"
+      registryAuthority:
+        principals:
+          - scheme: eip191
+            identifier: "0x90f79bf6eb2c4f870365e785982e1f101e93b906"
+      seller:
+        agentId: bob
+        dbPath: "/var/lib/arkhai/agent.db"
+        logFilePath: "./logs/bob.log"
+        resourcesCsvPath: "/app/src/market_storefront/data/kvm1-machine.csv"
+        enableEventQueue: false
+        provisioning:
+          mode: "mock"
+          identity:
+            principals:
+              - scheme: eip191
+                identifier: "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+        negotiation:
+          policies:
+            - "has_matching_inventory_guard"
+            - "escrow_shape_guard"
+            - "bisection"
+        integrations:
+          geminiApiKey: ""
+      settlement:
+        schema_version: 1
+        priority: []
+      # Optional public EVM resources. Keep both mappings empty for fiat-only.
+      wallet: {}
+      chains: {}
+
+# ---------------------------------------------------------------------------
+# Helm smoke-test configuration.
+# targetAgentName empty = first configured agent. activeProfiles empty =
+# "helm,<selected-component>-secret". secretName empty = selected agent Secret.
+# ---------------------------------------------------------------------------
+tests:
+  targetAgentName: ""
+  activeProfiles: ""
+  secretName: ""
+  secretKey: ""
+
+# Number of replicas per agent.
+replicaCount: 1
+
+# Resource requests/limits – tune per environment.
+resources: {}
+#  requests:
+#    cpu: 100m
+#    memory: 128Mi
+#  limits:
+#    cpu: 500m
+#    memory: 512Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# ---------------------------------------------------------------------------
+# Persistence — per-agent ReadWriteOnce PVC backing the SQLite agent.db.
+#
+# Without this, the SQLite file lives on the container's writable overlay
+# and is lost on every pod restart (rolling updates, OOM kills, node
+# drains). With persistence.enabled=true, each agent gets its own PVC
+# mounted at /var/lib/arkhai and the chart pins the Deployment to a
+# Recreate strategy so the RWO volume can detach cleanly across rollouts.
+#
+# enabled: false falls back to an emptyDir mount at the same path so
+# kind/CI and local-iteration setups without a StorageClass keep working
+# (state still ephemeral). dbPath in config above should match the mount
+# point either way.
+#
+# storageClass: empty string uses the cluster's default StorageClass.
+# Set explicitly when the cluster has multiple classes or you want a
+# specific one (e.g. "standard-rwo" on GKE, "gp3" on EKS).
+#
+# accessMode: ReadWriteOnce only — multi-attach RWO would corrupt SQLite.
+# A single-replica constraint is enforced via the Recreate strategy and
+# replicaCount above.
+#
+# The PVC carries helm.sh/resource-policy: keep so `helm uninstall` does
+# not reap the volume. Reinstalling the release rebinds the existing
+# PVC and recovers prior state.
+# ---------------------------------------------------------------------------
+persistence:
+  enabled: true
+  storageClass: ""
+  size: 1Gi
+  accessMode: ReadWriteOnce
+  # Where the PVC mounts inside the pod. dbPath above must point at a
+  # file under this directory; the chart does not enforce this — it's
+  # the operator's responsibility to keep the two aligned.
+  mountPath: /var/lib/arkhai
+  # existingClaim: when set, the chart mounts this pre-existing PVC
+  # and does not create one of its own. Leave empty to let the
+  # chart create a PVC (requires persistence.enabled: true).
+  existingClaim: ""
+
+# ---------------------------------------------------------------------------
+# zerotierEnabled: controls whether ZeroTier networking infrastructure is
+# included in the pod spec (NET_ADMIN/SYS_MODULE capabilities and the
+# /dev/net/tun hostPath volume).
+#
+# true  (default) — full ZeroTier support; required for peer-to-peer overlay
+#                   networking between seller and buyer agents.
+# false           — ZeroTier daemon still starts via entrypoint.sh (fail-soft)
+#                   but the pod requests no privileged capabilities and mounts
+#                   no hostPath volumes. Use for GKE Autopilot or any
+#                   environment where the agent is reachable via an API gateway
+#                   rather than a ZeroTier overlay network.
+#
+# The application runtime is unaffected when zerotier_network is unset
+# in storefront.toml — all ZeroTier code paths are conditional on that value.
+# ---------------------------------------------------------------------------
+zerotierEnabled: true

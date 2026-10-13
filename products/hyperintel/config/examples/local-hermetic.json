@@ -1,0 +1,15 @@
+{
+  "schema_version": "hyperintel.runtime-configuration.v1",
+  "runtime_id": "runtime:local-hermetic-1",
+  "profile": "LOCAL_HERMETIC",
+  "local_persistence": {
+    "replay_database": {
+      "path": "/var/lib/hyperintel/replay.sqlite3",
+      "max_connections": 4
+    },
+    "execution_journal_database": {
+      "path": "/var/lib/hyperintel/execution-journal.sqlite3",
+      "max_connections": 4
+    }
+  }
+}
