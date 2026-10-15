@@ -1,0 +1,16 @@
+Copyright 2026 Epistetechnician and contributors
+
+Licensed under the Apache License, Version 2.0. See LICENSE.
+
+This repository is research software. Results recorded here are bounded local
+or synthetic observations governed by the claim boundaries in RESEARCH.md and
+AGENTS.md. Nothing here is a security guarantee, a proof of production
+readiness, a benchmark leaderboard result, or independent verification unless a
+record says so explicitly.
+
+Third-party and nested components keep their own licenses:
+- products/simple-compute-market is MIT-licensed (see its LICENSE).
+- products/hyperintel and products/justai are preserved imports from sibling
+  repositories (see docs/provenance.md); upstream references that are not
+  redistributable are kept local and ignored (see references/).
+- Pinned third-party dependencies keep the licenses of their own distributions.

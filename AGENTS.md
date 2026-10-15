@@ -49,3 +49,12 @@ The root package scripts are the monorepo entrypoints. A passing subworkspace
 gate proves only that subworkspace's declared scope. Report root, HyperIntel,
 JustAI, and Simple Compute Market validation separately; do not infer an
 independent review or production authorization from local green checks.
+
+## Public release readiness
+
+Explicit public-release readiness is authorized under named state slice
+`public-release-readiness-v1`: additive `LICENSE`, `NOTICE`, `SECURITY.md`,
+`CONTRIBUTING.md`, `RESEARCH.md`, README navigation, and a CI workflow. It
+changes no source, import digests, product behavior, or claim ceilings and
+authorizes no provider call, paid execution, fleet action, or live market write.
+Every mutation in this phase names state slice `public-release-readiness-v1`.

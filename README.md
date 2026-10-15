@@ -307,3 +307,10 @@ See [outcome architecture](docs/outcomes/architecture.md), [compute-market archi
 [HIP-4 status](docs/outcomes/hyperliquid-hip4.md), [limitations](docs/outcomes/limitations.md),
 and the [threat model](docs/threat-model.md). The full migration sequence is in
 the [HyperAI Compute Market plan](docs/compute-market-refactor-plan.md).
+
+## Research report and project policy
+
+See [RESEARCH.md](RESEARCH.md) for findings, [SECURITY.md](SECURITY.md) to report
+issues, and [CONTRIBUTING.md](CONTRIBUTING.md). The repository is licensed under
+[Apache-2.0](LICENSE); `products/simple-compute-market` keeps its MIT license
+(see [NOTICE](NOTICE)).
