@@ -27,3 +27,7 @@ references/the-compute-bazaar-main/
 *.db
 *.db-shm
 *.db-wal
+
+# generated live-board export (static demo)
+/demo/live-board/site/live-board.json
+/dist/
