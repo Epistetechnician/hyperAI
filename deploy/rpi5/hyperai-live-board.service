@@ -1,0 +1,19 @@
+[Unit]
+Description=Refresh GPUDiff snapshot and export the static live price board
+After=hyperai-service.service
+Requires=hyperai-service.service
+
+[Service]
+Type=oneshot
+User=hyperai
+Group=hyperai
+ExecStart=/usr/bin/node /opt/hyperai/demo/export.mjs --home /var/lib/hyperai --refresh --out /srv/hyperai-board
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/srv/hyperai-board
+ReadOnlyPaths=/var/lib/hyperai
+RestrictAddressFamilies=AF_INET AF_UNIX
+CapabilityBoundingSet=
+TimeoutStartSec=120

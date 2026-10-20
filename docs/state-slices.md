@@ -24120,3 +24120,44 @@ provider-wide conclusion.
 
 Publish boundary: private local packet and sanitized categorical result;
 no external publication or remote execution.
+
+## `hyperai.demo.live_price_board_static_export.v1`
+
+Status: implemented and locally qualified; hosted deployment is operator-run.
+
+Purpose: let a public site show the existing live GPUDiff price snapshot
+without exposing the owner-only HyperAI service.
+
+Exact files: `demo/live-board/export.mjs`, `demo/live-board/export.test.mjs`,
+`demo/live-board/site/{index.html,board.css,board.js,board.test.mjs}`,
+`deploy/rpi5/*`, `package.json` (`test:demo` script), `.gitignore`, this record.
+No Rust source, import digest, or existing product behavior changes.
+
+Allowed effects: the exporter connects only to the recorded IPv4 loopback
+address with the local owner bearer; it may call the existing fixed
+`/api/v1/data/gpudiff/refresh` route (one GET to
+`https://gpudiff.com/api/v1/offers.json`, no credentials), the catalog route,
+and one fixed read-only data query; it atomically writes one static
+`live-board.json`. The static site fetches only that same-origin file and
+renders every string with `textContent`. Deployment notes for a Raspberry Pi 5
+are unverified on hardware.
+
+Non-goals: any public listener on the HyperAI service; exposing refresh,
+schedule, deal, fleet, eval, trade, agent, or storage routes; authentication
+changes; provider calls, purchases, orders, settlement, HIP-4 publication;
+other data sources; forecasts or returns; production, security, SOTA, or
+independent-verification claims.
+
+Proof gates: `corepack pnpm run test:demo` (9 tests: row validation, https-only
+sources, snapshot-digest binding, loopback-only fetches with bearer, atomic
+write, non-loopback refusal, stale-data warning, no-HTML-injection rendering).
+Manual: live refresh against the pinned service returned 2,581 feed rows and 53
+valid GPU hourly rows.
+
+Claim ceiling: source-attributed public list prices from an aggregator feed with
+publisher timestamps (the dataset's own ceiling), shown read-only. Not an
+executable offer, quote, capacity, or return. The service's query response
+still labels results "synthetic local query result only"; the exporter uses the
+catalog's GPUDiff ceiling and does not repeat that label.
+
+Publish boundary: code and docs only; generated `live-board.json` is ignored.
