@@ -24161,3 +24161,28 @@ still labels results "synthetic local query result only"; the exporter uses the
 catalog's GPUDiff ceiling and does not repeat that label.
 
 Publish boundary: code and docs only; generated `live-board.json` is ignored.
+
+## `hyperai.intelligence_per_dollar.prd.v1`
+
+Status: draft documentation; no implementation or external authority granted.
+
+Purpose: unify the compute-market wedge, explorer, and live-board work under an
+intelligence-per-dollar objective, add the kernel-memory and guided-search
+pipeline, and record what exists, what is missing, and a staged execution plan.
+
+Exact files: `docs/hyperai-intelligence-per-dollar-prd.md`,
+`docs/hyperai-intelligence-per-dollar-prd-e.md`, this record. No source,
+schema, import digest, or product behavior changes.
+
+Allowed effects: documentation edits only. No provider call, rental, paid
+execution, fleet action, data ingestion, testnet write, or publication.
+
+Proof gates: root documentation and link checks if present; reviewer reads the
+gap table against repository contents. No runtime gate applies.
+
+Claim ceiling: product requirements and plan. The cost-saving, throughput, and
+quality hypotheses are unmeasured; section 8 of the PRD lists only local
+synthetic capabilities.
+
+Publish boundary: repository documentation only. Each later stage in the
+PRD-E needs its own named slice before work starts.
