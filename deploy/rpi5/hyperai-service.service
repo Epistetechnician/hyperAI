@@ -1,0 +1,27 @@
+[Unit]
+Description=HyperAI owner-only loopback service (data layer for the live price board)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# `hyperai service start` backgrounds the server and returns.
+Type=oneshot
+RemainAfterExit=yes
+User=hyperai
+Group=hyperai
+ExecStart=/opt/hyperai/bin/hyperai service start --home /var/lib/hyperai --port 4317
+ExecStop=/opt/hyperai/bin/hyperai service stop --home /var/lib/hyperai
+TimeoutStopSec=30
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ReadWritePaths=/var/lib/hyperai
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
