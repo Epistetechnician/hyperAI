@@ -158,7 +158,11 @@ pub fn sign_pqai_capture_v1(
 ) -> PqaiCaptureEnvelopeV1 {
     let mut sk_chains = [[0u8; 32]; WOTS_CHAINS];
     let mut pk_endpoints = [[0u8; 32]; WOTS_CHAINS];
-    for (idx, (sk_slot, pk_slot)) in sk_chains.iter_mut().zip(pk_endpoints.iter_mut()).enumerate() {
+    for (idx, (sk_slot, pk_slot)) in sk_chains
+        .iter_mut()
+        .zip(pk_endpoints.iter_mut())
+        .enumerate()
+    {
         let mut h = Sha256::new();
         h.update(PQAI_FRAME_DOMAIN_V1);
         h.update(b"sk\0");
