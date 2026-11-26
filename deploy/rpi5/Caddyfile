@@ -1,0 +1,19 @@
+# Static, read-only. Nothing proxies to the HyperAI service (it stays on
+# 127.0.0.1:4317 behind its own owner bearer). Replace the site address.
+board.example.com {
+	root * /srv/hyperai-board
+	encode zstd gzip
+	file_server
+
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		Cross-Origin-Opener-Policy same-origin
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+	@data path /live-board.json
+	header @data Cache-Control "no-cache"
+	@methods not method GET HEAD OPTIONS
+	respond @methods 405
+}

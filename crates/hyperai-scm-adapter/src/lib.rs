@@ -3,6 +3,8 @@
 //! The adapter implements only the pinned v2 read-signature contract. It does
 //! not call a registry, contact a seller, select offers, or authorize a deal.
 
+pub mod pqai;
+
 use std::{
     collections::BTreeSet,
     time::{SystemTime, UNIX_EPOCH},

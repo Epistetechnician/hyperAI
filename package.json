@@ -32,6 +32,7 @@
     "verify:tui-panic": "sh scripts/with-pinned-rust.sh cargo build --locked --offline -p outcomes-cli --features tui-panic-test-support --bin hyperai && python3 scripts/verify_hyperai_tui_ctrl_c.py --expect-panic",
     "lint": "corepack pnpm run lint:fast && corepack pnpm run verify:contracts && corepack pnpm run verify:full",
     "lint:fast": "corepack pnpm run verify:interface && corepack pnpm run verify:installer && sh scripts/with-pinned-rust.sh cargo fmt --all -- --check && sh scripts/with-pinned-rust.sh cargo clippy --workspace --all-targets --all-features -- -D warnings",
+    "test:demo": "node --test demo/live-board/export.test.mjs demo/live-board/site/board.test.mjs",
     "test:focused": "sh scripts/with-pinned-rust.sh cargo test -p hyperai-foundation -p hyperai-market -p hyperai-acp -p hyperai-application -p hyperai-data -p hyperai-eval -p hyperai-fleet -p hyperai-hyperintel-adapter -p hyperai-local-service -p hyperai-mcp -p hyperai-scm-adapter -p hyperai-trade -p hyperai-tui -p outcomes-domain -p outcomes-persistence-sqlx -p outcomes-blobstore -p outcomes-corpus -p outcomes-source -p outcomes-runner -p outcomes-harness -p outcomes-evidence -p outcomes-resolution -p outcomes-application -p hyperliquid-hip4 -p outcomes-api -p outcomes-cli -p outcomes-worker",
     "verify:contracts": "sh scripts/with-pinned-rust.sh cargo test --workspace contract_",
     "verify:full": "sh scripts/with-pinned-rust.sh cargo test --workspace --all-features",

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
+<title>HyperAI Live GPU Price Board</title>
+<link rel="stylesheet" href="board.css">
+</head>
+<body>
+<header>
+  <p class="eyebrow">HYPERAI · LIVE PUBLIC PRICES · READ-ONLY</p>
+  <h1>GPU hourly price board</h1>
+  <p class="lede">Public list prices published by an aggregator feed. This is an observation display: <strong>not an executable offer</strong>, not a quote, and nothing here can buy, reserve, or settle anything.</p>
+  <p id="freshness" class="status" role="status" aria-live="polite">Loading latest snapshot…</p>
+</header>
+<main>
+  <section aria-labelledby="summary-h">
+    <h2 id="summary-h">By GPU model</h2>
+    <div class="scroll"><table id="summary"><thead><tr><th>GPU model</th><th>Type</th><th class="num">Offers</th><th class="num">Min $/h</th><th class="num">Median $/h</th><th class="num">Max $/h</th></tr></thead><tbody></tbody></table></div>
+  </section>
+  <section aria-labelledby="rows-h">
+    <h2 id="rows-h">All observations</h2>
+    <div class="scroll"><table id="rows"><thead><tr><th>Provider</th><th>GPU model</th><th>Type</th><th>Region</th><th class="num">$/h</th><th>Observed (UTC)</th><th>Source</th></tr></thead><tbody></tbody></table></div>
+  </section>
+  <section aria-labelledby="limits-h" class="limits">
+    <h2 id="limits-h">What this does not claim</h2>
+    <ul id="nonclaims"></ul>
+    <p id="ceiling"></p>
+    <p id="provenance"></p>
+  </section>
+</main>
+<footer>
+  <p>Data: <a href="https://gpudiff.com/api/" rel="noopener noreferrer">GPUDiff</a> public GPU offer feed, CC BY 4.0. Snapshot imported, hashed, and normalized by the <a href="https://github.com/Epistetechnician/hyperAI" rel="noopener noreferrer">HyperAI</a> data layer. Local replay-level evidence only.</p>
+</footer>
+<script src="board.js"></script>
+</body>
+</html>
